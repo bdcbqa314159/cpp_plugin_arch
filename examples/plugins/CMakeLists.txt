@@ -1,0 +1,2 @@
+add_subdirectory(basic_calc)
+add_subdirectory(scientific_calc)
