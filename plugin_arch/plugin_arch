@@ -1,0 +1,9 @@
+// Umbrella include for the plugin_arch library.
+
+#pragma once
+
+#include "IPlugin.hpp"
+#include "PluginLoader.hpp"
+#include "PluginFactory.hpp"
+#include "platform/exported.hpp"
+#include "platform/abi.hpp"
