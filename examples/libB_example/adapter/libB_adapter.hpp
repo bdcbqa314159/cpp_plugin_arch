@@ -1,0 +1,37 @@
+// Adapter plugin — wraps the pre-built libB into a plugin.
+//
+// You can't modify libB (no source code). So you write this thin wrapper that:
+//   1. Implements IStatsEngine (the plugin interface)
+//   2. Holds an instance of libB::Stats internally
+//   3. Delegates every call to it
+//
+// This is the Adapter pattern applied to plugin loading.
+
+#pragma once
+
+#include <memory>
+
+#include "IStatsEngine.hpp"
+#include "libB.hpp"
+
+namespace examples {
+
+class LibBAdapter : public IStatsEngine {
+ public:
+  LibBAdapter();
+
+  // Plugin metadata
+  std::string name() const override { return "LibBAdapter"; }
+  std::string version() const override { return "1.0.0"; }
+  std::string type() const override { return "stats_engine"; }
+
+  // Forwarded to libB::Stats
+  double mean(const std::vector<double>& data) override;
+  double stddev(const std::vector<double>& data) override;
+  double median(const std::vector<double>& data) override;
+
+ private:
+  std::unique_ptr<libB::Stats> impl_;
+};
+
+}  // namespace examples
