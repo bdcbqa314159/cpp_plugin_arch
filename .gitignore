@@ -1,0 +1,31 @@
+# Build
+build/
+install/
+compile_commands.json
+CMakeUserPresets.json
+
+# C/C++ artifacts
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.out
+*.d
+*.gch
+*.pch
+*.dSYM/
+
+# IDE
+.vscode/
+.vs/
+.idea/
+*.code-workspace
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
