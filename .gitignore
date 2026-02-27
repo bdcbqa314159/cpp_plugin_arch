@@ -26,6 +26,9 @@ CMakeUserPresets.json
 *.code-workspace
 .cache/
 
+# Notes
+NOTES.md
+
 # OS
 .DS_Store
 Thumbs.db
