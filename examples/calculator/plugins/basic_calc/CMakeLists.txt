@@ -3,7 +3,7 @@ add_library(basic_calc SHARED basic_calc.cpp)
 target_link_libraries(basic_calc PRIVATE plugin_arch)
 
 target_include_directories(basic_calc PRIVATE
-    ${CMAKE_SOURCE_DIR}/examples/interfaces
+    ${CMAKE_SOURCE_DIR}/examples/calculator/interfaces
 )
 
 # Ensure symbol visibility for the factory functions

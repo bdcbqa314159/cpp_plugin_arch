@@ -7,9 +7,5 @@ target_include_directories(libB_vendor PUBLIC
     ${CMAKE_SOURCE_DIR}/examples/libB_example/prebuilt/include
 )
 
-# Copy the artifact into prebuilt/lib/ so the adapter can find it
-add_custom_command(TARGET libB_vendor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:libB_vendor>
-        ${CMAKE_SOURCE_DIR}/examples/libB_example/prebuilt/lib/$<TARGET_FILE_NAME:libB_vendor>
-)
+# No post-build copy — the artifact lands in CMAKE_LIBRARY_OUTPUT_DIRECTORY
+# alongside all other shared libraries (build/bin/).

@@ -1,5 +1,4 @@
-add_subdirectory(plugins)
-add_subdirectory(host)
+add_subdirectory(calculator)
 add_subdirectory(libA_example)
 add_subdirectory(libB_example)
 add_subdirectory(crash_diagnostic)
