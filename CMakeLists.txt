@@ -22,5 +22,7 @@ if(UNIX)
     target_link_libraries(plugin_arch INTERFACE dl)
 endif()
 
-# --- examples ---
-add_subdirectory(examples)
+# --- examples (only when building standalone) ---
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    add_subdirectory(examples)
+endif()
