@@ -11,6 +11,7 @@ cpp_plugin_arch/
 │   ├── IPlugin.hpp                         # Base interface (name, version, type)
 │   ├── PluginLoader.hpp                    # RAII cross-platform loader (dlopen/LoadLibrary)
 │   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
+│   ├── ServiceLocator.hpp                  # Plugin-to-plugin communication
 │   ├── PluginFactory.hpp                   # REGISTER_PLUGIN() macro
 │   └── platform/
 │       ├── exported.hpp                    # Symbol visibility macros
@@ -36,6 +37,11 @@ cpp_plugin_arch/
 │   │   └── host/main.cpp
 │   │
 │   ├── registry_demo/                      # Discover plugins by metadata (registry)
+│   │   └── host/main.cpp
+│   │
+│   ├── service_locator_demo/               # Plugin-to-plugin communication
+│   │   ├── interfaces/IReportGenerator.hpp
+│   │   ├── report_generator/               # Uses locator to find other plugins
 │   │   └── host/main.cpp
 │   │
 │   └── crash_diagnostic/                   # Debug why a library crashes on load
@@ -87,6 +93,16 @@ Uses `PluginRegistry` to scan a directory and index all plugins by their `IPlugi
 ```
 
 The demo discovers all plugins in the build directory, lists them grouped by type, queries by type (`"calculator"`) and by name (`"BasicCalc"`), and reports any libraries that failed to load.
+
+### Service locator — plugin-to-plugin communication
+
+Uses `ServiceLocator` to let plugins discover and call each other at runtime. A report generator plugin queries the locator for a stats engine and a text formatter — no direct dependencies between plugins.
+
+```bash
+./build/bin/service_locator_demo
+```
+
+The host loads three plugins, registers the stats engine and text formatter as services, injects the locator into the report generator via the `IServiceAware` mixin, and the report generator produces output using the other two plugins.
 
 ### Crash diagnostic — debug loading failures
 
