@@ -22,6 +22,11 @@ if(UNIX)
     target_link_libraries(plugin_arch INTERFACE dl)
 endif()
 
+# GCC < 9 requires linking stdc++fs for std::filesystem
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
+    link_libraries(stdc++fs)
+endif()
+
 # --- examples (only when building standalone) ---
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_subdirectory(examples)
