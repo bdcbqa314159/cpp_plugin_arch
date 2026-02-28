@@ -10,6 +10,7 @@ cpp_plugin_arch/
 │   ├── plugin_arch                         # Umbrella include
 │   ├── IPlugin.hpp                         # Base interface (name, version, type)
 │   ├── PluginLoader.hpp                    # RAII cross-platform loader (dlopen/LoadLibrary)
+│   ├── HotPluginLoader.hpp                 # Hot-reload wrapper (polling + copy-on-swap)
 │   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
 │   ├── ServiceLocator.hpp                  # Plugin-to-plugin communication
 │   ├── PluginFactory.hpp                   # REGISTER_PLUGIN() macro
@@ -48,6 +49,11 @@ cpp_plugin_arch/
 │   │   ├── interfaces/ICalculatorV2.hpp    # Extends ICalculator with trig/log
 │   │   ├── plugins/trig_calc/              # Implements ICalculatorV2
 │   │   └── host/main.cpp                   # Loads v1 and v2 plugins together
+│   │
+│   ├── hot_reload_demo/                    # Swap plugins at runtime (hot-reload)
+│   │   ├── interfaces/IGreeter.hpp
+│   │   ├── plugins/greeter/                # Edit this, rebuild, see live reload
+│   │   └── host/main.cpp
 │   │
 │   └── crash_diagnostic/                   # Debug why a library crashes on load
 │       ├── bad_plugins/                    # Intentionally broken plugins
@@ -118,6 +124,20 @@ Demonstrates how to evolve an interface without breaking existing plugins. `ICal
 ```
 
 The host loads all three calculator plugins as `ICalculator` (v1), exercises the common methods, then uses `dynamic_cast<ICalculatorV2*>` to detect which plugins support the extended interface. Only `TrigCalc` responds to the v2 probe — the other two safely return nullptr.
+
+### Hot-reload — swap plugins at runtime
+
+Uses `HotPluginLoader<T>` to detect when a plugin's `.dylib` has been rebuilt and reload it without restarting the host. The old library stays loaded until all `shared_ptr`s to the old instance are released, preventing crashes from dangling vtable pointers.
+
+```bash
+# Terminal 1: run the host
+./build/bin/hot_reload_demo
+
+# Terminal 2: edit the greeting in greeter.cpp, then rebuild
+cmake --build build
+
+# Terminal 1 shows: [reloaded] + new greeting
+```
 
 ### Crash diagnostic — debug loading failures
 

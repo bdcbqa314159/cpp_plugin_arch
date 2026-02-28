@@ -4,6 +4,7 @@
 
 #include "IPlugin.hpp"
 #include "PluginLoader.hpp"
+#include "HotPluginLoader.hpp"
 #include "PluginFactory.hpp"
 #include "PluginRegistry.hpp"
 #include "ServiceLocator.hpp"
