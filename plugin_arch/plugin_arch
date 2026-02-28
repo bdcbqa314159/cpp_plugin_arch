@@ -5,5 +5,7 @@
 #include "IPlugin.hpp"
 #include "PluginLoader.hpp"
 #include "PluginFactory.hpp"
+#include "PluginRegistry.hpp"
 #include "platform/exported.hpp"
 #include "platform/abi.hpp"
+#include "platform/shared_lib.hpp"

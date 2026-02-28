@@ -10,10 +10,12 @@ cpp_plugin_arch/
 │   ├── plugin_arch                         # Umbrella include
 │   ├── IPlugin.hpp                         # Base interface (name, version, type)
 │   ├── PluginLoader.hpp                    # RAII cross-platform loader (dlopen/LoadLibrary)
+│   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
 │   ├── PluginFactory.hpp                   # REGISTER_PLUGIN() macro
 │   └── platform/
 │       ├── exported.hpp                    # Symbol visibility macros
-│       └── abi.hpp                         # extern "C" wrapper macro
+│       ├── abi.hpp                         # extern "C" wrapper macro
+│       └── shared_lib.hpp                  # Platform extension helpers
 │
 ├── examples/
 │   ├── calculator/                         # Two plugins, same interface (polymorphism)
@@ -31,6 +33,9 @@ cpp_plugin_arch/
 │   │   ├── interfaces/IStatsEngine.hpp
 │   │   ├── prebuilt/include/libB.hpp       # Vendor header (all you have)
 │   │   ├── adapter/                        # Thin wrapper that pluginifies libB
+│   │   └── host/main.cpp
+│   │
+│   ├── registry_demo/                      # Discover plugins by metadata (registry)
 │   │   └── host/main.cpp
 │   │
 │   └── crash_diagnostic/                   # Debug why a library crashes on load
@@ -72,6 +77,16 @@ You have a pre-built `.dylib` and its header, but no source code. Write a thin *
 ```bash
 ./build/bin/libB_host
 ```
+
+### Plugin registry — discover plugins by metadata
+
+Uses `PluginRegistry` to scan a directory and index all plugins by their `IPlugin` metadata (name, version, type). No filename conventions needed — the registry probes each shared library and queries its metadata directly.
+
+```bash
+./build/bin/registry_demo
+```
+
+The demo discovers all plugins in the build directory, lists them grouped by type, queries by type (`"calculator"`) and by name (`"BasicCalc"`), and reports any libraries that failed to load.
 
 ### Crash diagnostic — debug loading failures
 
