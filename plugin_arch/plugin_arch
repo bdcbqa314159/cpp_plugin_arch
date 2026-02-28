@@ -3,6 +3,7 @@
 #pragma once
 
 #include "IPlugin.hpp"
+#include "ILifecycleAware.hpp"
 #include "PluginLoader.hpp"
 #include "HotPluginLoader.hpp"
 #include "PluginFactory.hpp"

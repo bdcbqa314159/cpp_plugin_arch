@@ -9,6 +9,7 @@ cpp_plugin_arch/
 ├── plugin_arch/                            # Reusable header-only library
 │   ├── plugin_arch                         # Umbrella include
 │   ├── IPlugin.hpp                         # Base interface (name, version, type)
+│   ├── ILifecycleAware.hpp                 # Opt-in lifecycle hooks (on_init/on_shutdown)
 │   ├── PluginLoader.hpp                    # RAII cross-platform loader (dlopen/LoadLibrary)
 │   ├── HotPluginLoader.hpp                 # Hot-reload wrapper (polling + copy-on-swap)
 │   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
@@ -60,6 +61,11 @@ cpp_plugin_arch/
 │   ├── dynamic_plugin_demo/                # No headers — pure C ABI discovery
 │   │   ├── plugins/math_functions/         # Exports C functions + descriptor
 │   │   └── host/main.cpp                  # Discovers and calls functions by name
+│   │
+│   ├── lifecycle_demo/                     # Opt-in init/shutdown hooks
+│   │   ├── interfaces/IWorker.hpp          # Worker interface (process items)
+│   │   ├── plugins/counting_worker/        # Implements ILifecycleAware
+│   │   └── host/main.cpp                  # Detects mixin, calls hooks
 │   │
 │   └── crash_diagnostic/                   # Debug why a library crashes on load
 │       ├── bad_plugins/                    # Intentionally broken plugins
@@ -154,6 +160,16 @@ Uses `DynamicLibrary` and `PluginDescriptor` to load a plugin with zero interfac
 ```
 
 The demo loads `libmath_functions.dylib`, queries its descriptor to list all exported functions and their signatures, calls `math_add`, `math_multiply`, and `math_sqrt`, probes for an optional `math_divide` (not exported), and checks for legacy convention symbols.
+
+### Lifecycle demo — opt-in init/shutdown hooks
+
+Uses `ILifecycleAware` to give plugins post-construction setup and pre-destruction teardown hooks. The host detects the mixin via `dynamic_cast` — same pattern as `IServiceAware`. Plugins that don't need lifecycle hooks simply don't inherit the mixin.
+
+```bash
+./build/bin/lifecycle_demo
+```
+
+The demo loads a `CountingWorker` plugin that uppercases strings and counts how many it has processed. The host calls `on_init()` after loading (resets the counter) and `on_shutdown()` before cleanup (prints a summary of items processed).
 
 ### Crash diagnostic — debug loading failures
 
