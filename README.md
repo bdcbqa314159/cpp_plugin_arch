@@ -14,6 +14,8 @@ cpp_plugin_arch/
 │   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
 │   ├── ServiceLocator.hpp                  # Plugin-to-plugin communication
 │   ├── PluginFactory.hpp                   # REGISTER_PLUGIN() macro
+│   ├── DynamicLibrary.hpp                  # Non-templated RAII loader (no type assumptions)
+│   ├── PluginDescriptor.hpp                # POD descriptor + REGISTER_DYNAMIC_PLUGIN() macro
 │   └── platform/
 │       ├── exported.hpp                    # Symbol visibility macros
 │       ├── abi.hpp                         # extern "C" wrapper macro
@@ -54,6 +56,10 @@ cpp_plugin_arch/
 │   │   ├── interfaces/IGreeter.hpp
 │   │   ├── plugins/greeter/                # Edit this, rebuild, see live reload
 │   │   └── host/main.cpp
+│   │
+│   ├── dynamic_plugin_demo/                # No headers — pure C ABI discovery
+│   │   ├── plugins/math_functions/         # Exports C functions + descriptor
+│   │   └── host/main.cpp                  # Discovers and calls functions by name
 │   │
 │   └── crash_diagnostic/                   # Debug why a library crashes on load
 │       ├── bad_plugins/                    # Intentionally broken plugins
@@ -138,6 +144,16 @@ cmake --build build
 
 # Terminal 1 shows: [reloaded] + new greeting
 ```
+
+### Dynamic plugin — no headers at all
+
+Uses `DynamicLibrary` and `PluginDescriptor` to load a plugin with zero interface headers. The plugin exports pure `extern "C"` functions and a `plugin_describe()` descriptor. The host discovers available functions at runtime, resolves them by name, and calls them — no vtables, no `IPlugin`, no `allocator`/`deallocator`.
+
+```bash
+./build/bin/dynamic_plugin_demo
+```
+
+The demo loads `libmath_functions.dylib`, queries its descriptor to list all exported functions and their signatures, calls `math_add`, `math_multiply`, and `math_sqrt`, probes for an optional `math_divide` (not exported), and checks for legacy convention symbols.
 
 ### Crash diagnostic — debug loading failures
 

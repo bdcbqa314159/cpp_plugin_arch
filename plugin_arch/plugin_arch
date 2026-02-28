@@ -8,6 +8,8 @@
 #include "PluginFactory.hpp"
 #include "PluginRegistry.hpp"
 #include "ServiceLocator.hpp"
+#include "DynamicLibrary.hpp"
+#include "PluginDescriptor.hpp"
 #include "platform/exported.hpp"
 #include "platform/abi.hpp"
 #include "platform/shared_lib.hpp"
