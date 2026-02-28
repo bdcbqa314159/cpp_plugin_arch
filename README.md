@@ -44,6 +44,11 @@ cpp_plugin_arch/
 │   │   ├── report_generator/               # Uses locator to find other plugins
 │   │   └── host/main.cpp
 │   │
+│   ├── versioned_calculator/               # Interface versioning (v1 + v2 coexist)
+│   │   ├── interfaces/ICalculatorV2.hpp    # Extends ICalculator with trig/log
+│   │   ├── plugins/trig_calc/              # Implements ICalculatorV2
+│   │   └── host/main.cpp                   # Loads v1 and v2 plugins together
+│   │
 │   └── crash_diagnostic/                   # Debug why a library crashes on load
 │       ├── bad_plugins/                    # Intentionally broken plugins
 │       └── host/main.cpp                   # Diagnostic loader (crash_diag)
@@ -103,6 +108,16 @@ Uses `ServiceLocator` to let plugins discover and call each other at runtime. A 
 ```
 
 The host loads three plugins, registers the stats engine and text formatter as services, injects the locator into the report generator via the `IServiceAware` mixin, and the report generator produces output using the other two plugins.
+
+### Versioned calculator — interface versioning
+
+Demonstrates how to evolve an interface without breaking existing plugins. `ICalculatorV2` extends `ICalculator` with trig and log methods — but the original `ICalculator` is frozen. Existing v1 plugins (`BasicCalc`, `ScientificCalc`) continue to work unchanged.
+
+```bash
+./build/bin/versioned_calculator_host
+```
+
+The host loads all three calculator plugins as `ICalculator` (v1), exercises the common methods, then uses `dynamic_cast<ICalculatorV2*>` to detect which plugins support the extended interface. Only `TrigCalc` responds to the v2 probe — the other two safely return nullptr.
 
 ### Crash diagnostic — debug loading failures
 
