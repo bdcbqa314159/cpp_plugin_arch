@@ -1,22 +1,17 @@
 // Symbol visibility macros for cross-platform shared libraries.
+// Plugins are always loaded at runtime (dlopen / LoadLibrary), never linked
+// via import libraries, so we always export — dllimport is never needed.
+//
 // Adapted from https://atomheartother.github.io/
 // Modified by Bernardo Cohen
 
 #pragma once
 
 #if defined(_WIN32) || defined(__CYGWIN__)
-  #ifdef WIN_EXPORT
-    #ifdef __GNUC__
-      #define EXPORTED __attribute__((dllexport))
-    #else
-      #define EXPORTED __declspec(dllexport)
-    #endif
+  #ifdef __GNUC__
+    #define EXPORTED __attribute__((dllexport))
   #else
-    #ifdef __GNUC__
-      #define EXPORTED __attribute__((dllimport))
-    #else
-      #define EXPORTED __declspec(dllimport)
-    #endif
+    #define EXPORTED __declspec(dllexport)
   #endif
   #define NOT_EXPORTED
 #else
