@@ -3,12 +3,12 @@
 // The host registers loaded plugin instances as services. Plugins that need
 // other plugins query the locator by type string.
 //
-// Lifetime rule: destroy the ServiceLocator (or call clear()) before
-// destroying the PluginLoaders, because the shared_ptr custom deleters
-// point into loaded libraries.
+// Stores weak_ptr — the ServiceLocator does not own the plugins. The host's
+// shared_ptrs are the owners, so destruction order no longer matters.
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -21,15 +21,18 @@ namespace plugin_arch {
 class ServiceLocator {
  public:
   // Register a loaded plugin as a service.
+  // The locator holds a weak reference — it does not extend the plugin's lifetime.
   void add(std::shared_ptr<IPlugin> service) {
-    services_.push_back(std::move(service));
+    services_.push_back(service);
   }
 
   // Get the first service matching the given type string.
-  // Returns nullptr if no match is found.
+  // Returns nullptr if no match is found (or if the plugin has been destroyed).
   template <typename T>
   std::shared_ptr<T> get(const std::string& type) const {
-    for (const auto& svc : services_) {
+    for (const auto& weak_svc : services_) {
+      auto svc = weak_svc.lock();
+      if (!svc) continue;
       if (svc->type() == type) {
         auto casted = std::dynamic_pointer_cast<T>(svc);
         if (casted) return casted;
@@ -42,7 +45,9 @@ class ServiceLocator {
   template <typename T>
   std::vector<std::shared_ptr<T>> get_all(const std::string& type) const {
     std::vector<std::shared_ptr<T>> result;
-    for (const auto& svc : services_) {
+    for (const auto& weak_svc : services_) {
+      auto svc = weak_svc.lock();
+      if (!svc) continue;
       if (svc->type() == type) {
         auto casted = std::dynamic_pointer_cast<T>(svc);
         if (casted) result.push_back(std::move(casted));
@@ -51,12 +56,22 @@ class ServiceLocator {
     return result;
   }
 
+  // Remove expired entries (plugins that have been destroyed).
+  void cleanup() {
+    services_.erase(
+        std::remove_if(services_.begin(), services_.end(),
+                       [](const std::weak_ptr<IPlugin>& w) {
+                         return w.expired();
+                       }),
+        services_.end());
+  }
+
   void clear() { services_.clear(); }
 
   std::size_t size() const { return services_.size(); }
 
  private:
-  std::vector<std::shared_ptr<IPlugin>> services_;
+  std::vector<std::weak_ptr<IPlugin>> services_;
 };
 
 // Opt-in mixin for plugins that need access to the service locator.

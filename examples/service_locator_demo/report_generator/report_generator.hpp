@@ -14,9 +14,9 @@ namespace examples {
 class ReportGenerator : public IReportGenerator, public plugin_arch::IServiceAware {
  public:
   // Plugin metadata
-  std::string name() const override { return "ReportGenerator"; }
-  std::string version() const override { return "1.0.0"; }
-  std::string type() const override { return "report_generator"; }
+  const std::string& name() const override { static const std::string s("ReportGenerator"); return s; }
+  const std::string& version() const override { static const std::string s("1.0.0"); return s; }
+  const std::string& type() const override { static const std::string s("report_generator"); return s; }
 
   // IServiceAware — the host injects the locator before calling generate()
   void set_service_locator(plugin_arch::ServiceLocator& locator) override;

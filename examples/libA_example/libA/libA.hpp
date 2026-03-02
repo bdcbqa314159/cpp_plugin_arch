@@ -24,9 +24,9 @@ namespace examples {
 class LibA : public ITextFormatter {
  public:
   // -- plugin metadata (added for plugin_arch) --
-  std::string name() const override { return "LibA"; }
-  std::string version() const override { return "1.0.0"; }
-  std::string type() const override { return "text_formatter"; }
+  const std::string& name() const override { static const std::string s("LibA"); return s; }
+  const std::string& version() const override { static const std::string s("1.0.0"); return s; }
+  const std::string& type() const override { static const std::string s("text_formatter"); return s; }
 
   // -- original methods (unchanged) --
   std::string to_upper(const std::string& text) override;

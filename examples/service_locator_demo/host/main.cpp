@@ -10,7 +10,6 @@
 //   3. Load ReportGenerator
 //   4. Detect IServiceAware via dynamic_cast, inject the locator
 //   5. Call report->generate(data)
-//   6. locator.clear() before loaders go out of scope
 
 #include <filesystem>
 #include <iostream>
@@ -104,11 +103,6 @@ int main(int argc, char* argv[]) {
   std::vector<double> data = {10.5, 20.3, 15.7, 8.2, 25.1, 12.8, 18.4};
   std::string result = report->generate(data);
   std::cout << result << "\n";
-
-  // --- Step 6: Clean up ---
-  // Clear the locator before loaders go out of scope.
-  // The shared_ptr custom deleters point into the loaded libraries.
-  locator.clear();
 
   return 0;
 }

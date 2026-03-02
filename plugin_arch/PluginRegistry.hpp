@@ -14,14 +14,9 @@
 #include <string>
 #include <vector>
 
+#include "DynamicLibrary.hpp"
 #include "IPlugin.hpp"
 #include "platform/shared_lib.hpp"
-
-#if defined(_WIN32)
-  #include <Windows.h>
-#elif defined(__linux__) || defined(__APPLE__)
-  #include <dlfcn.h>
-#endif
 
 namespace plugin_arch {
 
@@ -100,55 +95,13 @@ class PluginRegistry {
   std::vector<PluginEntry> entries_;
   std::vector<ScanError> errors_;
 
-  // RAII guard that calls a cleanup function on scope exit.
-  class ScopeGuard {
-   public:
-    explicit ScopeGuard(std::function<void()> fn) : fn_(std::move(fn)) {}
-    ~ScopeGuard() { if (fn_) fn_(); }
-    ScopeGuard(const ScopeGuard&) = delete;
-    ScopeGuard& operator=(const ScopeGuard&) = delete;
-   private:
-    std::function<void()> fn_;
-  };
-
   // Probe a single shared library for plugin metadata.
+  // DynamicLibrary's destructor handles dlclose — no manual cleanup needed.
   static PluginEntry probe(const std::filesystem::path& path) {
-#if defined(_WIN32)
-    HMODULE handle = LoadLibrary(path.string().c_str());
-    if (!handle) {
-      throw std::runtime_error("Failed to load library");
-    }
-    ScopeGuard guard([&] { FreeLibrary(handle); });
+    DynamicLibrary lib(path.string());
 
-    auto alloc = reinterpret_cast<IPlugin* (*)()>(
-        GetProcAddress(handle, "allocator"));
-    if (!alloc) {
-      throw std::runtime_error("Symbol 'allocator' not found");
-    }
-
-    auto dealloc = reinterpret_cast<void (*)(IPlugin*)>(
-        GetProcAddress(handle, "deallocator"));
-    if (!dealloc) {
-      throw std::runtime_error("Symbol 'deallocator' not found");
-    }
-#elif defined(__linux__) || defined(__APPLE__)
-    void* handle = dlopen(path.string().c_str(), RTLD_NOW);
-    if (!handle) {
-      throw std::runtime_error(dlerror());
-    }
-    ScopeGuard guard([&] { dlclose(handle); });
-
-    auto alloc = reinterpret_cast<IPlugin* (*)()>(dlsym(handle, "allocator"));
-    if (!alloc) {
-      throw std::runtime_error("Symbol 'allocator' not found");
-    }
-
-    auto dealloc = reinterpret_cast<void (*)(IPlugin*)>(
-        dlsym(handle, "deallocator"));
-    if (!dealloc) {
-      throw std::runtime_error("Symbol 'deallocator' not found");
-    }
-#endif
+    auto alloc = lib.resolve<IPlugin* (*)()>("allocator");
+    auto dealloc = lib.resolve<void (*)(IPlugin*)>("deallocator");
 
     IPlugin* raw = alloc();
     if (!raw) {

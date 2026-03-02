@@ -21,9 +21,9 @@ class LibBAdapter : public IStatsEngine {
   LibBAdapter();
 
   // Plugin metadata
-  std::string name() const override { return "LibBAdapter"; }
-  std::string version() const override { return "1.0.0"; }
-  std::string type() const override { return "stats_engine"; }
+  const std::string& name() const override { static const std::string s("LibBAdapter"); return s; }
+  const std::string& version() const override { static const std::string s("1.0.0"); return s; }
+  const std::string& type() const override { static const std::string s("stats_engine"); return s; }
 
   // Forwarded to libB::Stats
   double mean(const std::vector<double>& data) override;

@@ -35,6 +35,9 @@ class HotPluginLoader {
   HotPluginLoader(const HotPluginLoader&) = delete;
   HotPluginLoader& operator=(const HotPluginLoader&) = delete;
 
+  HotPluginLoader(HotPluginLoader&&) noexcept = default;
+  HotPluginLoader& operator=(HotPluginLoader&&) noexcept = default;
+
   std::shared_ptr<T> get_instance() { return instance_; }
 
   // Check file modification time; reload if changed. Returns true on reload.

@@ -11,9 +11,9 @@ namespace examples {
 class CountingWorker : public IWorker, public plugin_arch::ILifecycleAware {
  public:
   // IPlugin metadata
-  std::string name() const override { return "CountingWorker"; }
-  std::string version() const override { return "1.0.0"; }
-  std::string type() const override { return "worker"; }
+  const std::string& name() const override { static const std::string s("CountingWorker"); return s; }
+  const std::string& version() const override { static const std::string s("1.0.0"); return s; }
+  const std::string& type() const override { static const std::string s("worker"); return s; }
 
   // IWorker
   std::string process(const std::string& item) override;

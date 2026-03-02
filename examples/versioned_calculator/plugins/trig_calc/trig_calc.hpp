@@ -6,9 +6,9 @@ namespace examples {
 
 class TrigCalc : public ICalculatorV2 {
  public:
-  std::string name() const override { return "TrigCalc"; }
-  std::string version() const override { return "2.0.0"; }
-  std::string type() const override { return "calculator"; }
+  const std::string& name() const override { static const std::string s("TrigCalc"); return s; }
+  const std::string& version() const override { static const std::string s("2.0.0"); return s; }
+  const std::string& type() const override { static const std::string s("calculator"); return s; }
 
   // v1 (ICalculator)
   double add(double a, double b) override;
