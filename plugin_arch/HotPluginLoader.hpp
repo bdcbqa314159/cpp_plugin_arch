@@ -1,7 +1,9 @@
 // Hot-reload wrapper around PluginLoader.
 // Detects changes via std::filesystem::last_write_time() polling.
-// On reload, the old PluginLoader is kept alive until all shared_ptrs
-// to the old instance are released, preventing the deleter-after-dlclose crash.
+//
+// Old plugin instances keep their library alive via shared_ptr in the
+// deleter — no retirement mechanism needed. The host can safely hold
+// shared_ptrs from previous versions indefinitely.
 
 #pragma once
 
@@ -9,7 +11,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include "PluginLoader.hpp"
 
@@ -25,11 +26,6 @@ class HotPluginLoader {
         alloc_symbol_(alloc_symbol),
         dealloc_symbol_(dealloc_symbol) {
     load();
-  }
-
-  ~HotPluginLoader() {
-    instance_.reset();
-    cleanup_retired();
   }
 
   HotPluginLoader(const HotPluginLoader&) = delete;
@@ -62,12 +58,18 @@ class HotPluginLoader {
 
   // Force reload regardless of modification time.
   void reload() {
-    // Retire current loader + weak reference to its instance
-    retired_.push_back({std::move(loader_), instance_});
-    instance_.reset();
+    // Create the new loader first — if this throws, current state is untouched.
+    auto new_loader = std::make_unique<PluginLoader<T>>(
+        library_path_, alloc_symbol_, dealloc_symbol_);
+    auto new_instance = new_loader->get_instance();
 
-    load();
-    cleanup_retired();
+    // Success — swap in the new version.
+    // Old instances (if any) keep the old library alive via their deleters.
+    loader_ = std::move(new_loader);
+    instance_ = std::move(new_instance);
+
+    std::error_code ec;
+    last_modified_ = std::filesystem::last_write_time(library_path_, ec);
   }
 
   const std::string& library_path() const { return library_path_; }
@@ -81,12 +83,6 @@ class HotPluginLoader {
   std::unique_ptr<PluginLoader<T>> loader_;
   std::shared_ptr<T> instance_;
 
-  struct RetiredPlugin {
-    std::unique_ptr<PluginLoader<T>> loader;
-    std::weak_ptr<T> instance;
-  };
-  std::vector<RetiredPlugin> retired_;
-
   void load() {
     std::error_code ec;
     last_modified_ = std::filesystem::last_write_time(library_path_, ec);
@@ -94,17 +90,9 @@ class HotPluginLoader {
       throw std::runtime_error("Cannot stat library: " + library_path_);
     }
 
-    loader_ =
-        std::make_unique<PluginLoader<T>>(library_path_, alloc_symbol_, dealloc_symbol_);
+    loader_ = std::make_unique<PluginLoader<T>>(library_path_, alloc_symbol_,
+                                                dealloc_symbol_);
     instance_ = loader_->get_instance();
-  }
-
-  // Erase retired entries whose shared_ptrs have all been released.
-  void cleanup_retired() {
-    retired_.erase(
-        std::remove_if(retired_.begin(), retired_.end(),
-                       [](const RetiredPlugin& r) { return r.instance.expired(); }),
-        retired_.end());
   }
 };
 

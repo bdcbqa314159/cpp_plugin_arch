@@ -51,14 +51,21 @@ class DynamicLibrary {
 #if defined(_WIN32)
     auto func =
         reinterpret_cast<Func>(GetProcAddress(handle_, symbol.c_str()));
-#elif defined(__linux__) || defined(__APPLE__)
-    auto func = reinterpret_cast<Func>(dlsym(handle_, symbol.c_str()));
-#endif
     if (!func) {
       throw std::runtime_error("Failed to resolve symbol '" + symbol +
                                "' in: " + library_path_);
     }
     return func;
+#elif defined(__linux__) || defined(__APPLE__)
+    dlerror();  // clear any previous error
+    auto func = reinterpret_cast<Func>(dlsym(handle_, symbol.c_str()));
+    const char* err = dlerror();
+    if (err) {
+      throw std::runtime_error("Failed to resolve symbol '" + symbol +
+                               "' in: " + library_path_ + " (" + err + ")");
+    }
+    return func;
+#endif
   }
 
   // Check whether a symbol exists without throwing.
@@ -66,8 +73,8 @@ class DynamicLibrary {
 #if defined(_WIN32)
     return GetProcAddress(handle_, symbol.c_str()) != nullptr;
 #elif defined(__linux__) || defined(__APPLE__)
-    dlerror();  // clear any previous error
-    dlsym(handle_, symbol.c_str());
+    (void)dlerror();  // clear any previous error
+    (void)dlsym(handle_, symbol.c_str());
     return dlerror() == nullptr;
 #endif
   }
