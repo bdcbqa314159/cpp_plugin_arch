@@ -15,7 +15,7 @@ namespace plugin_arch {
 template <typename T>
 class PluginLoader {
  public:
-  PluginLoader(const std::string& library_path,
+  explicit PluginLoader(const std::string& library_path,
                const std::string& alloc_symbol = "allocator",
                const std::string& dealloc_symbol = "deallocator")
       : lib_(std::make_shared<DynamicLibrary>(library_path)),

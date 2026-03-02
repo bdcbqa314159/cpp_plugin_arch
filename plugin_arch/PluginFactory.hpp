@@ -7,15 +7,20 @@
 
 #pragma once
 
+#include "IPlugin.hpp"
 #include "platform/abi.hpp"
 #include "platform/exported.hpp"
 
+// The factory functions traffic in IPlugin* — the framework's root type.
+// This avoids pointer-adjustment issues with multiple inheritance and keeps
+// the C ABI contract explicit. delete on IPlugin* works because IPlugin has
+// a virtual destructor.
 #define REGISTER_PLUGIN(ClassName)                        \
   EXPORT_C {                                              \
-    EXPORTED ClassName* allocator() {                     \
+    EXPORTED plugin_arch::IPlugin* allocator() {          \
       return new ClassName();                             \
     }                                                     \
-    EXPORTED void deallocator(ClassName* ptr) {           \
+    EXPORTED void deallocator(plugin_arch::IPlugin* ptr) {\
       delete ptr;                                         \
     }                                                     \
   }

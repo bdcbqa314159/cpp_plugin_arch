@@ -7,6 +7,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 #if defined(_WIN32)
   #include <Windows.h>
@@ -48,6 +49,9 @@ class DynamicLibrary {
   // Throws std::runtime_error if the symbol is not found.
   template <typename Func>
   Func resolve(const std::string& symbol) const {
+    static_assert(std::is_pointer_v<Func> &&
+                      std::is_function_v<std::remove_pointer_t<Func>>,
+                  "resolve<Func>: Func must be a function pointer type");
 #if defined(_WIN32)
     auto func =
         reinterpret_cast<Func>(GetProcAddress(handle_, symbol.c_str()));
@@ -93,9 +97,10 @@ class DynamicLibrary {
 
   void open() {
 #if defined(_WIN32)
-    handle_ = LoadLibrary(library_path_.c_str());
+    handle_ = LoadLibraryA(library_path_.c_str());
     if (!handle_) {
-      throw std::runtime_error("Failed to load library: " + library_path_);
+      throw std::runtime_error("Failed to load library: " + library_path_ +
+                               " (error " + std::to_string(GetLastError()) + ")");
     }
 #elif defined(__linux__) || defined(__APPLE__)
     handle_ = dlopen(library_path_.c_str(), RTLD_NOW);

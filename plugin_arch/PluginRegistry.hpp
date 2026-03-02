@@ -48,7 +48,8 @@ class PluginRegistry {
     std::size_t found = 0;
 
     for (const auto& entry : fs::directory_iterator(directory)) {
-      if (!entry.is_regular_file()) continue;
+      std::error_code ec;
+      if (!entry.is_regular_file(ec) || ec) continue;
       if (!platform::is_shared_library(entry.path())) continue;
 
       try {
