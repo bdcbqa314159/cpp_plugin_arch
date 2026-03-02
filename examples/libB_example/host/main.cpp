@@ -7,18 +7,9 @@
 
 #include "IStatsEngine.hpp"
 #include "PluginLoader.hpp"
+#include "platform/shared_lib.hpp"
 
 namespace fs = std::filesystem;
-
-static std::string plugin_extension() {
-#if defined(_WIN32)
-  return ".dll";
-#elif defined(__APPLE__)
-  return ".dylib";
-#else
-  return ".so";
-#endif
-}
 
 int main(int argc, char* argv[]) {
   fs::path plugin_dir = fs::path(argv[0]).parent_path();
@@ -26,7 +17,7 @@ int main(int argc, char* argv[]) {
     plugin_dir = argv[1];
   }
 
-  std::string ext = plugin_extension();
+  auto ext = plugin_arch::platform::shared_lib_extension();
   fs::path adapter_path;
   for (const auto& entry : fs::directory_iterator(plugin_dir)) {
     if (entry.path().extension() == ext &&

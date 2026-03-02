@@ -18,24 +18,15 @@
 #include "IReportGenerator.hpp"
 #include "PluginLoader.hpp"
 #include "ServiceLocator.hpp"
+#include "platform/shared_lib.hpp"
 
 // Only need the base types for registering in the locator
 #include "IPlugin.hpp"
 
 namespace fs = std::filesystem;
 
-static std::string plugin_extension() {
-#if defined(_WIN32)
-  return ".dll";
-#elif defined(__APPLE__)
-  return ".dylib";
-#else
-  return ".so";
-#endif
-}
-
 static fs::path find_plugin(const fs::path& dir, const std::string& name) {
-  std::string ext = plugin_extension();
+  auto ext = plugin_arch::platform::shared_lib_extension();
   for (const auto& entry : fs::directory_iterator(dir)) {
     auto filename = entry.path().filename().string();
     if (entry.path().extension() == ext &&

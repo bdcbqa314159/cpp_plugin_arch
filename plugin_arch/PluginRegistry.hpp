@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -108,13 +109,14 @@ class PluginRegistry {
       throw std::runtime_error("allocator() returned nullptr");
     }
 
+    // unique_ptr ensures dealloc is called even if metadata copy throws.
+    std::unique_ptr<IPlugin, decltype(dealloc)> guard(raw, dealloc);
+
     PluginEntry entry;
     entry.path = path;
     entry.name = raw->name();
     entry.version = raw->version();
     entry.type = raw->type();
-
-    dealloc(raw);
 
     return entry;
   }

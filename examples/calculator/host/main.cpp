@@ -6,18 +6,9 @@
 
 #include "ICalculator.hpp"
 #include "PluginLoader.hpp"
+#include "platform/shared_lib.hpp"
 
 namespace fs = std::filesystem;
-
-static std::string plugin_extension() {
-#if defined(_WIN32)
-  return ".dll";
-#elif defined(__APPLE__)
-  return ".dylib";
-#else
-  return ".so";
-#endif
-}
 
 static void exercise(examples::ICalculator& calc) {
   std::cout << "  add(10, 3)      = " << calc.add(10, 3) << "\n";
@@ -45,7 +36,7 @@ int main(int argc, char* argv[]) {
     plugin_dir = argv[1];
   }
 
-  std::string ext = plugin_extension();
+  auto ext = plugin_arch::platform::shared_lib_extension();
 
   // Discover plugin files in the directory
   std::vector<fs::path> plugin_paths;
