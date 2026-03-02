@@ -3,7 +3,7 @@
 //
 //   REGISTER_PLUGIN(MyPluginClass)
 //
-// Expands to extern "C" functions: allocator() and deallocator(ClassName*).
+// Expands to extern "C" functions: allocator() and deallocator(IPlugin*).
 
 #pragma once
 

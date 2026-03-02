@@ -1,6 +1,9 @@
 // Typed RAII plugin loader.
 // Composes DynamicLibrary for the actual dlopen/dlclose/dlsym work.
 // Returns shared_ptr<T> with a custom deleter that calls back into the plugin.
+//
+// Symbols are resolved at construction time — the constructor throws if the
+// library doesn't export the expected allocator/deallocator functions.
 
 #pragma once
 
@@ -15,12 +18,15 @@ namespace plugin_arch {
 template <typename T>
 class PluginLoader {
  public:
+  using AllocFunc = T* (*)();
+  using DeallocFunc = void (*)(T*);
+
   explicit PluginLoader(const std::string& library_path,
                const std::string& alloc_symbol = "allocator",
                const std::string& dealloc_symbol = "deallocator")
       : lib_(std::make_shared<DynamicLibrary>(library_path)),
-        alloc_symbol_(alloc_symbol),
-        dealloc_symbol_(dealloc_symbol) {}
+        alloc_(lib_->resolve<AllocFunc>(alloc_symbol)),
+        dealloc_(lib_->resolve<DeallocFunc>(dealloc_symbol)) {}
 
   PluginLoader(const PluginLoader&) = delete;
   PluginLoader& operator=(const PluginLoader&) = delete;
@@ -29,13 +35,7 @@ class PluginLoader {
   PluginLoader& operator=(PluginLoader&&) noexcept = default;
 
   std::shared_ptr<T> get_instance() {
-    using AllocFunc = T* (*)();
-    using DeallocFunc = void (*)(T*);
-
-    auto alloc = lib_->resolve<AllocFunc>(alloc_symbol_);
-    auto dealloc = lib_->resolve<DeallocFunc>(dealloc_symbol_);
-
-    T* raw = alloc();
+    T* raw = alloc_();
     if (!raw) {
       throw std::runtime_error("allocator returned nullptr for: " +
                                lib_->path());
@@ -44,6 +44,7 @@ class PluginLoader {
     // Capture a shared reference to the library so it stays loaded as long
     // as the plugin instance exists — the deleter calls back into library code.
     auto lib_ref = lib_;
+    auto dealloc = dealloc_;
     return std::shared_ptr<T>(raw,
                               [dealloc, lib_ref](T* ptr) { dealloc(ptr); });
   }
@@ -52,8 +53,8 @@ class PluginLoader {
 
  private:
   std::shared_ptr<DynamicLibrary> lib_;
-  std::string alloc_symbol_;
-  std::string dealloc_symbol_;
+  AllocFunc alloc_;
+  DeallocFunc dealloc_;
 };
 
 }  // namespace plugin_arch

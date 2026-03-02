@@ -10,6 +10,12 @@
 #include <type_traits>
 
 #if defined(_WIN32)
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
   #include <Windows.h>
 #elif defined(__linux__) || defined(__APPLE__)
   #include <dlfcn.h>
@@ -99,8 +105,9 @@ class DynamicLibrary {
 #if defined(_WIN32)
     handle_ = LoadLibraryA(library_path_.c_str());
     if (!handle_) {
+      auto err = GetLastError();
       throw std::runtime_error("Failed to load library: " + library_path_ +
-                               " (error " + std::to_string(GetLastError()) + ")");
+                               " (error " + std::to_string(err) + ")");
     }
 #elif defined(__linux__) || defined(__APPLE__)
     handle_ = dlopen(library_path_.c_str(), RTLD_NOW);
