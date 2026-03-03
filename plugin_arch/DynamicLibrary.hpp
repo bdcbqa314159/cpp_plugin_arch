@@ -62,8 +62,10 @@ class DynamicLibrary {
     auto func =
         reinterpret_cast<Func>(GetProcAddress(handle_, symbol.c_str()));
     if (!func) {
+      auto err = GetLastError();
       throw std::runtime_error("Failed to resolve symbol '" + symbol +
-                               "' in: " + library_path_);
+                               "' in: " + library_path_ +
+                               " (error " + std::to_string(err) + ")");
     }
     return func;
 #elif defined(__linux__) || defined(__APPLE__)
