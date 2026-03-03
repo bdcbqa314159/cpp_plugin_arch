@@ -36,7 +36,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Exported functions (" << desc->function_count << "):\n";
     for (int i = 0; i < desc->function_count; ++i) {
       auto name = std::string(desc->functions[i].name);
-      auto pad = std::string(14 - name.size(), ' ');
+      auto pad_len = name.size() < 14 ? 14 - name.size() : 1;
+      auto pad = std::string(pad_len, ' ');
       std::cout << "  " << name << pad << ": "
                 << desc->functions[i].signature << "\n";
     }

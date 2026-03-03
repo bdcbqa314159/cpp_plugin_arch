@@ -12,14 +12,17 @@
 #include <string>
 
 #include "DynamicLibrary.hpp"
+#include "IPlugin.hpp"
 
 namespace plugin_arch {
 
 template <typename T>
 class PluginLoader {
  public:
-  using AllocFunc = T* (*)();
-  using DeallocFunc = void (*)(T*);
+  // Factory functions always traffic in IPlugin* — the framework's root type.
+  // This avoids pointer-adjustment issues with multiple inheritance.
+  using AllocFunc = IPlugin* (*)();
+  using DeallocFunc = void (*)(IPlugin*);
 
   explicit PluginLoader(const std::string& library_path,
                const std::string& alloc_symbol = "allocator",
@@ -35,18 +38,27 @@ class PluginLoader {
   PluginLoader& operator=(PluginLoader&&) noexcept = default;
 
   std::shared_ptr<T> get_instance() {
-    T* raw = alloc_();
+    IPlugin* raw = alloc_();
     if (!raw) {
       throw std::runtime_error("allocator returned nullptr for: " +
                                lib_->path());
     }
 
+    T* typed = dynamic_cast<T*>(raw);
+    if (!typed) {
+      dealloc_(raw);
+      throw std::runtime_error("plugin does not implement requested interface: " +
+                               lib_->path());
+    }
+
     // Capture a shared reference to the library so it stays loaded as long
     // as the plugin instance exists — the deleter calls back into library code.
+    // The deleter uses the original IPlugin* (not the casted T*) to avoid
+    // pointer-adjustment issues with multiple inheritance.
     auto lib_ref = lib_;
     auto dealloc = dealloc_;
-    return std::shared_ptr<T>(raw,
-                              [dealloc, lib_ref](T* ptr) { dealloc(ptr); });
+    return std::shared_ptr<T>(typed,
+                              [raw, dealloc, lib_ref](T*) { dealloc(raw); });
   }
 
   const std::string& path() const { return lib_->path(); }

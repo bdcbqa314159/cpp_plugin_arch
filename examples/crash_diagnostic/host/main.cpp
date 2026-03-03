@@ -45,7 +45,7 @@ static void print_step(int step, const std::string& desc, bool ok,
 static void dump_exported_symbols(const std::string& path) {
 #if !defined(_WIN32)
   std::cout << "\n--- Exported symbols (nm -gU) ---\n";
-  std::string cmd = "nm -gU \"" + path + "\" 2>&1 | head -30";
+  std::string cmd = "nm -gU '" + path + "' 2>&1 | head -30";
   std::system(cmd.c_str());
   std::cout << "---\n";
 #endif
@@ -55,12 +55,12 @@ static void dump_exported_symbols(const std::string& path) {
 static void dump_dependencies(const std::string& path) {
 #if defined(__APPLE__)
   std::cout << "\n--- Dependencies (otool -L) ---\n";
-  std::string cmd = "otool -L \"" + path + "\" 2>&1";
+  std::string cmd = "otool -L '" + path + "' 2>&1";
   std::system(cmd.c_str());
   std::cout << "---\n";
 #elif defined(__linux__)
   std::cout << "\n--- Dependencies (ldd) ---\n";
-  std::string cmd = "ldd \"" + path + "\" 2>&1";
+  std::string cmd = "ldd '" + path + "' 2>&1";
   std::system(cmd.c_str());
   std::cout << "---\n";
 #endif
@@ -101,27 +101,35 @@ static DiagResult diagnose(const std::string& path,
   using AllocFunc = void* (*)();
   using DeallocFunc = void (*)(void*);
 
+  AllocFunc alloc_fn = nullptr;
+  DeallocFunc dealloc_fn = nullptr;
+  std::string alloc_detail;
+  std::string dealloc_detail;
+
 #if defined(_WIN32)
-  auto alloc_fn = reinterpret_cast<AllocFunc>(GetProcAddress(handle, alloc_sym.c_str()));
-  auto dealloc_fn = reinterpret_cast<DeallocFunc>(GetProcAddress(handle, dealloc_sym.c_str()));
+  alloc_fn = reinterpret_cast<AllocFunc>(GetProcAddress(handle, alloc_sym.c_str()));
+  if (!alloc_fn)
+    alloc_detail = "'" + alloc_sym + "' not found (error " +
+                   std::to_string(GetLastError()) + ")";
+  dealloc_fn = reinterpret_cast<DeallocFunc>(GetProcAddress(handle, dealloc_sym.c_str()));
+  if (!dealloc_fn)
+    dealloc_detail = "'" + dealloc_sym + "' not found (error " +
+                     std::to_string(GetLastError()) + ")";
 #else
   dlerror();
-  auto alloc_fn = reinterpret_cast<AllocFunc>(dlsym(handle, alloc_sym.c_str()));
-  const char* alloc_err = dlerror();
-
+  alloc_fn = reinterpret_cast<AllocFunc>(dlsym(handle, alloc_sym.c_str()));
+  if (const char* err = dlerror())
+    alloc_detail = std::string("'") + alloc_sym + "' not found: " + err;
   dlerror();
-  auto dealloc_fn = reinterpret_cast<DeallocFunc>(dlsym(handle, dealloc_sym.c_str()));
-  const char* dealloc_err = dlerror();
+  dealloc_fn = reinterpret_cast<DeallocFunc>(dlsym(handle, dealloc_sym.c_str()));
+  if (const char* err = dlerror())
+    dealloc_detail = std::string("'") + dealloc_sym + "' not found: " + err;
 #endif
 
   if (!alloc_fn || !dealloc_fn) {
     std::string detail;
-    if (!alloc_fn)
-      detail += "'" + alloc_sym + "' not found" +
-                (alloc_err ? std::string(": ") + alloc_err : "") + "  ";
-    if (!dealloc_fn)
-      detail += "'" + dealloc_sym + "' not found" +
-                (dealloc_err ? std::string(": ") + dealloc_err : "");
+    if (!alloc_fn) detail += alloc_detail + "  ";
+    if (!dealloc_fn) detail += dealloc_detail;
     print_step(2, "Symbol resolution", false, detail);
     dump_exported_symbols(path);
 #if !defined(_WIN32)
@@ -141,6 +149,11 @@ static DiagResult diagnose(const std::string& path,
     instance = alloc_fn();
     if (!instance) {
       print_step(3, "Allocator call", false, "Returned nullptr");
+#if !defined(_WIN32)
+      dlclose(handle);
+#else
+      FreeLibrary(handle);
+#endif
       return result;
     }
     result.allocator_ok = true;

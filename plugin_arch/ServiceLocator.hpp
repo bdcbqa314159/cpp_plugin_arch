@@ -23,6 +23,7 @@ class ServiceLocator {
   // Register a loaded plugin as a service.
   // The locator holds a weak reference — it does not extend the plugin's lifetime.
   void add(std::shared_ptr<IPlugin> service) {
+    if (!service) return;
     services_.push_back(service);
   }
 
