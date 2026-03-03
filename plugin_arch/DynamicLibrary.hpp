@@ -67,7 +67,7 @@ class DynamicLibrary {
     }
     return func;
 #elif defined(__linux__) || defined(__APPLE__)
-    dlerror();  // clear any previous error
+    (void)dlerror();  // clear any previous error
     auto func = reinterpret_cast<Func>(dlsym(handle_, symbol.c_str()));
     const char* err = dlerror();
     if (err) {
@@ -112,8 +112,9 @@ class DynamicLibrary {
 #elif defined(__linux__) || defined(__APPLE__)
     handle_ = dlopen(library_path_.c_str(), RTLD_NOW);
     if (!handle_) {
-      throw std::runtime_error("Failed to load library: " +
-                               std::string(dlerror()));
+      const char* err = dlerror();
+      throw std::runtime_error("Failed to load library: " + library_path_ +
+                               " (" + (err ? err : "unknown error") + ")");
     }
 #endif
   }
