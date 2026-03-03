@@ -25,18 +25,6 @@
 
 namespace fs = std::filesystem;
 
-static fs::path find_plugin(const fs::path& dir, const std::string& name) {
-  auto ext = plugin_arch::platform::shared_lib_extension();
-  for (const auto& entry : fs::directory_iterator(dir)) {
-    auto filename = entry.path().filename().string();
-    if (entry.path().extension() == ext &&
-        filename.find(name) != std::string::npos) {
-      return entry.path();
-    }
-  }
-  return {};
-}
-
 int main(int argc, char* argv[]) {
   fs::path plugin_dir = fs::path(argv[0]).parent_path();
   if (argc > 1) {
@@ -44,9 +32,9 @@ int main(int argc, char* argv[]) {
   }
 
   // --- Step 1: Find plugins ---
-  auto stats_path = find_plugin(plugin_dir, "libB_adapter");
-  auto formatter_path = find_plugin(plugin_dir, "libA");
-  auto report_path = find_plugin(plugin_dir, "report_generator");
+  auto stats_path = plugin_arch::platform::find_plugin(plugin_dir, "libB_adapter");
+  auto formatter_path = plugin_arch::platform::find_plugin(plugin_dir, "libA");
+  auto report_path = plugin_arch::platform::find_plugin(plugin_dir, "report_generator");
 
   if (stats_path.empty() || formatter_path.empty() || report_path.empty()) {
     std::cerr << "Missing plugins in: " << plugin_dir << "\n";

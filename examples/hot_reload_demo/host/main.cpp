@@ -14,25 +14,17 @@ static volatile std::sig_atomic_t running = 1;
 
 static void signal_handler(int) { running = 0; }
 
-static fs::path find_plugin(const fs::path& dir, const std::string& name) {
-  auto ext = plugin_arch::platform::shared_lib_extension();
-  for (const auto& entry : fs::directory_iterator(dir)) {
-    auto filename = entry.path().filename().string();
-    if (entry.path().extension() == ext &&
-        filename.find(name) != std::string::npos) {
-      return entry.path();
-    }
-  }
-  throw std::runtime_error("Plugin not found: " + name + " in " + dir.string());
-}
-
 int main(int argc, char* argv[]) {
   fs::path plugin_dir = fs::path(argv[0]).parent_path();
   if (argc > 1) {
     plugin_dir = argv[1];
   }
 
-  auto greeter_path = find_plugin(plugin_dir, "greeter");
+  auto greeter_path = plugin_arch::platform::find_plugin(plugin_dir, "greeter");
+  if (greeter_path.empty()) {
+    std::cerr << "greeter plugin not found in: " << plugin_dir << "\n";
+    return 1;
+  }
 
   plugin_arch::HotPluginLoader<examples::IGreeter> loader(greeter_path.string());
   auto greeter = loader.get_instance();

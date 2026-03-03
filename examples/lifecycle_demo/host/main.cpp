@@ -21,18 +21,6 @@
 
 namespace fs = std::filesystem;
 
-static fs::path find_plugin(const fs::path& dir, const std::string& name) {
-  auto ext = plugin_arch::platform::shared_lib_extension();
-  for (const auto& entry : fs::directory_iterator(dir)) {
-    auto filename = entry.path().filename().string();
-    if (entry.path().extension() == ext &&
-        filename.find(name) != std::string::npos) {
-      return entry.path();
-    }
-  }
-  return {};
-}
-
 int main(int argc, char* argv[]) {
   fs::path plugin_dir = fs::path(argv[0]).parent_path();
   if (argc > 1) {
@@ -40,7 +28,7 @@ int main(int argc, char* argv[]) {
   }
 
   // --- Step 1: Load the plugin ---
-  auto worker_path = find_plugin(plugin_dir, "counting_worker");
+  auto worker_path = plugin_arch::platform::find_plugin(plugin_dir, "counting_worker");
   if (worker_path.empty()) {
     std::cerr << "counting_worker plugin not found in: " << plugin_dir << "\n";
     return 1;
