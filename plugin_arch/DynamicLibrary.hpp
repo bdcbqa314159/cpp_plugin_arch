@@ -19,14 +19,16 @@
   #include <Windows.h>
 #elif defined(__linux__) || defined(__APPLE__)
   #include <dlfcn.h>
+#else
+  #error "DynamicLibrary: unsupported platform"
 #endif
 
 namespace plugin_arch {
 
 class DynamicLibrary {
  public:
-  explicit DynamicLibrary(const std::string& library_path)
-      : library_path_(library_path) {
+  explicit DynamicLibrary(std::string library_path)
+      : library_path_(std::move(library_path)) {
     open();
   }
 
@@ -54,7 +56,7 @@ class DynamicLibrary {
   // Resolve a symbol by name and cast to the given function pointer type.
   // Throws std::runtime_error if the symbol is not found.
   template <typename Func>
-  Func resolve(const std::string& symbol) const {
+  [[nodiscard]] Func resolve(const std::string& symbol) const {
     static_assert(std::is_pointer_v<Func> &&
                       std::is_function_v<std::remove_pointer_t<Func>>,
                   "resolve<Func>: Func must be a function pointer type");
@@ -70,6 +72,7 @@ class DynamicLibrary {
     return func;
 #elif defined(__linux__) || defined(__APPLE__)
     (void)dlerror();  // clear any previous error
+    // POSIX guarantees void* <-> function pointer conversion works with dlsym.
     auto func = reinterpret_cast<Func>(dlsym(handle_, symbol.c_str()));
     const char* err = dlerror();
     if (err) {
@@ -81,7 +84,7 @@ class DynamicLibrary {
   }
 
   // Check whether a symbol exists without throwing.
-  bool has(const std::string& symbol) const {
+  [[nodiscard]] bool has(const std::string& symbol) const {
 #if defined(_WIN32)
     return GetProcAddress(handle_, symbol.c_str()) != nullptr;
 #elif defined(__linux__) || defined(__APPLE__)
@@ -91,7 +94,7 @@ class DynamicLibrary {
 #endif
   }
 
-  const std::string& path() const { return library_path_; }
+  [[nodiscard]] const std::string& path() const { return library_path_; }
 
  private:
 #if defined(_WIN32)
@@ -112,7 +115,7 @@ class DynamicLibrary {
                                " (error " + std::to_string(err) + ")");
     }
 #elif defined(__linux__) || defined(__APPLE__)
-    handle_ = dlopen(library_path_.c_str(), RTLD_NOW);
+    handle_ = dlopen(library_path_.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!handle_) {
       const char* err = dlerror();
       throw std::runtime_error("Failed to load library: " + library_path_ +

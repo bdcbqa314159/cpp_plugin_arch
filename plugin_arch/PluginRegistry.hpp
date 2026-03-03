@@ -21,6 +21,7 @@
 
 namespace plugin_arch {
 
+// Owns all its strings — safe to use after the plugin library is unloaded.
 struct PluginEntry {
   std::filesystem::path path;
   std::string name;
@@ -38,7 +39,7 @@ class PluginRegistry {
   // Scan a directory for shared libraries and probe each one for metadata.
   // Appends to existing entries, so you can scan multiple directories.
   // Returns the number of new plugins discovered in this call.
-  std::size_t scan(const std::filesystem::path& directory) {
+  [[nodiscard]] std::size_t scan(const std::filesystem::path& directory) {
     namespace fs = std::filesystem;
 
     if (!fs::is_directory(directory)) {
@@ -65,7 +66,7 @@ class PluginRegistry {
   }
 
   // Get all plugins of a given type.
-  std::vector<PluginEntry> get_all(const std::string& type) const {
+  [[nodiscard]] std::vector<PluginEntry> get_all(const std::string& type) const {
     std::vector<PluginEntry> result;
     for (const auto& e : entries_) {
       if (e.type == type) {
@@ -76,7 +77,7 @@ class PluginRegistry {
   }
 
   // Get a plugin by name. Returns the first match.
-  std::optional<PluginEntry> get(const std::string& name) const {
+  [[nodiscard]] std::optional<PluginEntry> get(const std::string& name) const {
     for (const auto& e : entries_) {
       if (e.name == name) {
         return e;
@@ -85,8 +86,8 @@ class PluginRegistry {
     return std::nullopt;
   }
 
-  const std::vector<PluginEntry>& entries() const { return entries_; }
-  const std::vector<ScanError>& errors() const { return errors_; }
+  [[nodiscard]] const std::vector<PluginEntry>& entries() const { return entries_; }
+  [[nodiscard]] const std::vector<ScanError>& errors() const { return errors_; }
 
   void clear() {
     entries_.clear();

@@ -17,6 +17,7 @@ int main(int argc, char* argv[]) {
   auto lib_name = "libmath_functions" +
                   std::string(plugin_arch::platform::shared_lib_extension());
   auto plugin_dir = fs::path(argv[0]).parent_path();
+  if (plugin_dir.empty()) plugin_dir = fs::current_path();
   if (argc > 1) {
     plugin_dir = argv[1];
   }
@@ -31,10 +32,15 @@ int main(int argc, char* argv[]) {
     using DescribeFunc = const plugin_arch::PluginDescriptor* (*)();
     auto describe = lib.resolve<DescribeFunc>("plugin_describe");
     auto* desc = describe();
+    if (!desc || !desc->name || !desc->version || !desc->functions ||
+        desc->function_count < 0) {
+      throw std::runtime_error("Plugin returned an invalid descriptor");
+    }
 
     std::cout << "\nPlugin: " << desc->name << " v" << desc->version << "\n";
     std::cout << "Exported functions (" << desc->function_count << "):\n";
     for (int i = 0; i < desc->function_count; ++i) {
+      if (!desc->functions[i].name || !desc->functions[i].signature) continue;
       auto name = std::string(desc->functions[i].name);
       auto pad_len = name.size() < 14 ? 14 - name.size() : 1;
       auto pad = std::string(pad_len, ' ');

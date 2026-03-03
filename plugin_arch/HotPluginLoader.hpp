@@ -19,12 +19,12 @@ namespace plugin_arch {
 template <typename T>
 class HotPluginLoader {
  public:
-  explicit HotPluginLoader(const std::string& library_path,
-                           const std::string& alloc_symbol = "allocator",
-                           const std::string& dealloc_symbol = "deallocator")
-      : library_path_(library_path),
-        alloc_symbol_(alloc_symbol),
-        dealloc_symbol_(dealloc_symbol) {
+  explicit HotPluginLoader(std::string library_path,
+                           std::string alloc_symbol = "allocator",
+                           std::string dealloc_symbol = "deallocator")
+      : library_path_(std::move(library_path)),
+        alloc_symbol_(std::move(alloc_symbol)),
+        dealloc_symbol_(std::move(dealloc_symbol)) {
     load();
   }
 
@@ -34,10 +34,10 @@ class HotPluginLoader {
   HotPluginLoader(HotPluginLoader&&) noexcept = default;
   HotPluginLoader& operator=(HotPluginLoader&&) noexcept = default;
 
-  std::shared_ptr<T> get_instance() { return instance_; }
+  [[nodiscard]] std::shared_ptr<T> get_instance() const { return instance_; }
 
   // Check file modification time; reload if changed. Returns true on reload.
-  bool check_and_reload() {
+  [[nodiscard]] bool check_and_reload() {
     std::error_code ec;
     auto mtime = std::filesystem::last_write_time(library_path_, ec);
     if (ec) return false;
@@ -72,7 +72,7 @@ class HotPluginLoader {
     last_modified_ = std::filesystem::last_write_time(library_path_, ec);
   }
 
-  const std::string& library_path() const { return library_path_; }
+  [[nodiscard]] const std::string& library_path() const { return library_path_; }
 
  private:
   std::string library_path_;

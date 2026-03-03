@@ -16,6 +16,7 @@ static void signal_handler(int) { running = 0; }
 
 int main(int argc, char* argv[]) {
   fs::path plugin_dir = fs::path(argv[0]).parent_path();
+  if (plugin_dir.empty()) plugin_dir = fs::current_path();
   if (argc > 1) {
     plugin_dir = argv[1];
   }

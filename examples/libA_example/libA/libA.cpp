@@ -5,6 +5,7 @@
 #include "libA.hpp"
 
 #include <algorithm>
+#include <cctype>
 
 #include "PluginExport.hpp"
 
@@ -12,13 +13,15 @@ namespace examples {
 
 std::string LibA::to_upper(const std::string& text) {
   std::string result = text;
-  std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+  std::transform(result.begin(), result.end(), result.begin(),
+                 [](unsigned char c) { return std::toupper(c); });
   return result;
 }
 
 std::string LibA::to_lower(const std::string& text) {
   std::string result = text;
-  std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+  std::transform(result.begin(), result.end(), result.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
   return result;
 }
 

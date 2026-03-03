@@ -11,15 +11,23 @@
 //   4. metadata   — can we call name()/version()/type()?
 //   5. deallocator — does cleanup crash?
 
-#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
   #include <Windows.h>
 #else
   #include <dlfcn.h>
+  #include <sys/wait.h>
+  #include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -41,12 +49,31 @@ static void print_step(int step, const std::string& desc, bool ok,
   }
 }
 
+// Run an external command with arguments, bypassing the shell entirely.
+// This avoids shell injection from untrusted paths.
+#if !defined(_WIN32)
+static void run_command(const char* prog, std::initializer_list<const char*> args) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    // Child: build argv and exec.
+    std::vector<const char*> argv;
+    argv.push_back(prog);
+    for (auto a : args) argv.push_back(a);
+    argv.push_back(nullptr);
+    execvp(prog, const_cast<char* const*>(argv.data()));
+    _exit(127);  // exec failed
+  } else if (pid > 0) {
+    int status = 0;
+    waitpid(pid, &status, 0);
+  }
+}
+#endif
+
 // Check what symbols the library exports (Unix only)
 static void dump_exported_symbols(const std::string& path) {
 #if !defined(_WIN32)
   std::cout << "\n--- Exported symbols (nm -gU) ---\n";
-  std::string cmd = "nm -gU '" + path + "' 2>&1 | head -30";
-  std::system(cmd.c_str());
+  run_command("nm", {"-gU", path.c_str()});
   std::cout << "---\n";
 #endif
 }
@@ -55,13 +82,11 @@ static void dump_exported_symbols(const std::string& path) {
 static void dump_dependencies(const std::string& path) {
 #if defined(__APPLE__)
   std::cout << "\n--- Dependencies (otool -L) ---\n";
-  std::string cmd = "otool -L '" + path + "' 2>&1";
-  std::system(cmd.c_str());
+  run_command("otool", {"-L", path.c_str()});
   std::cout << "---\n";
 #elif defined(__linux__)
   std::cout << "\n--- Dependencies (ldd) ---\n";
-  std::string cmd = "ldd '" + path + "' 2>&1";
-  std::system(cmd.c_str());
+  run_command("ldd", {path.c_str()});
   std::cout << "---\n";
 #endif
 }
@@ -75,7 +100,7 @@ static DiagResult diagnose(const std::string& path,
 
   // --- Step 1: dlopen ---
 #if defined(_WIN32)
-  HMODULE handle = LoadLibrary(path.c_str());
+  HMODULE handle = LoadLibraryA(path.c_str());
   if (!handle) {
     result.error = "LoadLibrary failed";
     print_step(1, "dlopen (LoadLibrary)", false, result.error);
@@ -87,7 +112,8 @@ static DiagResult diagnose(const std::string& path,
 
   void* handle = dlopen(path.c_str(), RTLD_NOW);
   if (!handle) {
-    result.error = dlerror();
+    const char* dl_err = dlerror();
+    result.error = dl_err ? dl_err : "unknown error";
     print_step(1, "dlopen", false, result.error);
     dump_dependencies(path);
     dump_exported_symbols(path);

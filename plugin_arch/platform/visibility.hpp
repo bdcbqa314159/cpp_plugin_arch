@@ -15,7 +15,15 @@
   #endif
   #define NOT_EXPORTED
 #else
-  #if __GNUC__ >= 4
+  #if defined(__has_attribute)
+    #if __has_attribute(visibility)
+      #define EXPORTED __attribute__((visibility("default")))
+      #define NOT_EXPORTED __attribute__((visibility("hidden")))
+    #else
+      #define EXPORTED
+      #define NOT_EXPORTED
+    #endif
+  #elif __GNUC__ >= 4
     #define EXPORTED __attribute__((visibility("default")))
     #define NOT_EXPORTED __attribute__((visibility("hidden")))
   #else

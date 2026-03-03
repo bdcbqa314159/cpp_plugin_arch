@@ -24,10 +24,10 @@ class PluginLoader {
   using AllocFunc = IPlugin* (*)();
   using DeallocFunc = void (*)(IPlugin*);
 
-  explicit PluginLoader(const std::string& library_path,
-               const std::string& alloc_symbol = "allocator",
-               const std::string& dealloc_symbol = "deallocator")
-      : lib_(std::make_shared<DynamicLibrary>(library_path)),
+  explicit PluginLoader(std::string library_path,
+               std::string alloc_symbol = "allocator",
+               std::string dealloc_symbol = "deallocator")
+      : lib_(std::make_shared<DynamicLibrary>(std::move(library_path))),
         alloc_(lib_->resolve<AllocFunc>(alloc_symbol)),
         dealloc_(lib_->resolve<DeallocFunc>(dealloc_symbol)) {}
 
@@ -37,7 +37,7 @@ class PluginLoader {
   PluginLoader(PluginLoader&&) noexcept = default;
   PluginLoader& operator=(PluginLoader&&) noexcept = default;
 
-  std::shared_ptr<T> get_instance() {
+  [[nodiscard]] std::shared_ptr<T> get_instance() {
     IPlugin* raw = alloc_();
     if (!raw) {
       throw std::runtime_error("allocator returned nullptr for: " +
@@ -61,7 +61,7 @@ class PluginLoader {
                               [raw, dealloc, lib_ref](T*) { dealloc(raw); });
   }
 
-  const std::string& path() const { return lib_->path(); }
+  [[nodiscard]] const std::string& path() const { return lib_->path(); }
 
  private:
   std::shared_ptr<DynamicLibrary> lib_;

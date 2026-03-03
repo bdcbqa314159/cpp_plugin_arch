@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -22,7 +21,7 @@ class ServiceLocator {
  public:
   // Register a loaded plugin as a service.
   // The locator holds a weak reference — it does not extend the plugin's lifetime.
-  void add(std::shared_ptr<IPlugin> service) {
+  void add(const std::shared_ptr<IPlugin>& service) {
     if (!service) return;
     services_.push_back(service);
   }
@@ -30,7 +29,7 @@ class ServiceLocator {
   // Get the first service matching the given type string.
   // Returns nullptr if no match is found (or if the plugin has been destroyed).
   template <typename T>
-  std::shared_ptr<T> get(const std::string& type) const {
+  [[nodiscard]] std::shared_ptr<T> get(const std::string& type) const {
     for (const auto& weak_svc : services_) {
       auto svc = weak_svc.lock();
       if (!svc) continue;
@@ -44,7 +43,7 @@ class ServiceLocator {
 
   // Get all services matching the given type string.
   template <typename T>
-  std::vector<std::shared_ptr<T>> get_all(const std::string& type) const {
+  [[nodiscard]] std::vector<std::shared_ptr<T>> get_all(const std::string& type) const {
     std::vector<std::shared_ptr<T>> result;
     for (const auto& weak_svc : services_) {
       auto svc = weak_svc.lock();
@@ -59,17 +58,14 @@ class ServiceLocator {
 
   // Remove expired entries (plugins that have been destroyed).
   void cleanup() {
-    services_.erase(
-        std::remove_if(services_.begin(), services_.end(),
-                       [](const std::weak_ptr<IPlugin>& w) {
-                         return w.expired();
-                       }),
-        services_.end());
+    std::erase_if(services_, [](const std::weak_ptr<IPlugin>& w) {
+      return w.expired();
+    });
   }
 
   void clear() { services_.clear(); }
 
-  std::size_t size() const { return services_.size(); }
+  [[nodiscard]] std::size_t size() const { return services_.size(); }
 
  private:
   std::vector<std::weak_ptr<IPlugin>> services_;

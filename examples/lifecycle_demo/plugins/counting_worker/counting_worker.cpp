@@ -1,6 +1,7 @@
 #include "counting_worker.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 
 #include "PluginExport.hpp"
@@ -10,7 +11,8 @@ namespace examples {
 std::string CountingWorker::process(const std::string& item) {
   ++counter_;
   std::string result = item;
-  std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+  std::transform(result.begin(), result.end(), result.begin(),
+                 [](unsigned char c) { return std::toupper(c); });
   return result;
 }
 
