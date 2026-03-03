@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <iostream>
 
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 namespace examples {
 

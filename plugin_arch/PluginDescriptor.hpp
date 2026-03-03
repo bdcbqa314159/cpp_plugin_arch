@@ -11,8 +11,8 @@
 
 #pragma once
 
-#include "platform/abi.hpp"
-#include "platform/exported.hpp"
+#include "platform/extern_c.hpp"
+#include "platform/visibility.hpp"
 
 namespace plugin_arch {
 

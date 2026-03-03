@@ -1,6 +1,6 @@
-#include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -16,17 +16,19 @@ static void exercise(examples::ICalculator& calc) {
   std::cout << "  multiply(10, 3) = " << calc.multiply(10, 3) << "\n";
   std::cout << "  divide(10, 3)   = " << calc.divide(10, 3) << "\n";
 
-  double pw = calc.power(2, 8);
-  if (std::isnan(pw))
-    std::cout << "  power(2, 8)     = [not supported]\n";
-  else
+  try {
+    double pw = calc.power(2, 8);
     std::cout << "  power(2, 8)     = " << pw << "\n";
+  } catch (const std::domain_error&) {
+    std::cout << "  power(2, 8)     = [not supported]\n";
+  }
 
-  double sq = calc.sqrt(144);
-  if (std::isnan(sq))
-    std::cout << "  sqrt(144)       = [not supported]\n";
-  else
+  try {
+    double sq = calc.sqrt(144);
     std::cout << "  sqrt(144)       = " << sq << "\n";
+  } catch (const std::domain_error&) {
+    std::cout << "  sqrt(144)       = [not supported]\n";
+  }
 }
 
 int main(int argc, char* argv[]) {

@@ -2,7 +2,7 @@
 
 #include "libB_adapter.hpp"
 
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 namespace examples {
 

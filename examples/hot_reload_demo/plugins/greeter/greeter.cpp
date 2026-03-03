@@ -1,6 +1,6 @@
 #include "greeter.hpp"
 
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 namespace examples {
 

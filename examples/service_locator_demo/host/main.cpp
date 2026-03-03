@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "IReportGenerator.hpp"
+#include "IServiceAware.hpp"
 #include "PluginLoader.hpp"
 #include "ServiceLocator.hpp"
 #include "platform/shared_lib.hpp"

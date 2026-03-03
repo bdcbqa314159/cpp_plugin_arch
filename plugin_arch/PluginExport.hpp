@@ -8,8 +8,8 @@
 #pragma once
 
 #include "IPlugin.hpp"
-#include "platform/abi.hpp"
-#include "platform/exported.hpp"
+#include "platform/extern_c.hpp"
+#include "platform/visibility.hpp"
 
 // The factory functions traffic in IPlugin* — the framework's root type.
 // This avoids pointer-adjustment issues with multiple inheritance and keeps

@@ -3,7 +3,7 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 namespace examples {
 

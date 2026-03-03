@@ -14,12 +14,12 @@ cpp_plugin_arch/
 │   ├── HotPluginLoader.hpp                 # Hot-reload wrapper (polling + copy-on-swap)
 │   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
 │   ├── ServiceLocator.hpp                  # Plugin-to-plugin communication
-│   ├── PluginFactory.hpp                   # REGISTER_PLUGIN() macro
+│   ├── PluginExport.hpp                    # REGISTER_PLUGIN() macro
 │   ├── DynamicLibrary.hpp                  # Non-templated RAII loader (no type assumptions)
 │   ├── PluginDescriptor.hpp                # POD descriptor + REGISTER_DYNAMIC_PLUGIN() macro
 │   └── platform/
-│       ├── exported.hpp                    # Symbol visibility macros
-│       ├── abi.hpp                         # extern "C" wrapper macro
+│       ├── visibility.hpp                  # Symbol visibility macros
+│       ├── extern_c.hpp                    # extern "C" wrapper macro
 │       └── shared_lib.hpp                  # Platform extension helpers
 │
 ├── examples/
@@ -207,7 +207,7 @@ class MyPlugin : public examples::ICalculator {
 ```cpp
 // my_plugin.cpp
 #include "my_plugin.hpp"
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 // This is all you need — generates allocator() and deallocator()
 REGISTER_PLUGIN(MyPlugin)

@@ -1,10 +1,8 @@
 #include "basic_calc.hpp"
 
-#include <cmath>
-#include <limits>
 #include <stdexcept>
 
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 namespace examples {
 
@@ -22,11 +20,11 @@ double BasicCalc::divide(double a, double b) {
 }
 
 double BasicCalc::power(double /*base*/, double /*exponent*/) {
-  return std::numeric_limits<double>::quiet_NaN();  // not supported
+  throw std::domain_error("BasicCalc: power() not supported");
 }
 
 double BasicCalc::sqrt(double /*a*/) {
-  return std::numeric_limits<double>::quiet_NaN();  // not supported
+  throw std::domain_error("BasicCalc: sqrt() not supported");
 }
 
 }  // namespace examples

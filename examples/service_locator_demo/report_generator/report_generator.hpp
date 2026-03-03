@@ -7,6 +7,7 @@
 #pragma once
 
 #include "IReportGenerator.hpp"
+#include "IServiceAware.hpp"
 #include "ServiceLocator.hpp"
 
 namespace examples {

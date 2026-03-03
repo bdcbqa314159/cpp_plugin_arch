@@ -8,7 +8,7 @@
 
 #include "IStatsEngine.hpp"
 #include "ITextFormatter.hpp"
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 namespace examples {
 

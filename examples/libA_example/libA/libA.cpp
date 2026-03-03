@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "PluginFactory.hpp"
+#include "PluginExport.hpp"
 
 namespace examples {
 
