@@ -22,9 +22,14 @@ class EventBus {
                                      const std::string& payload)>;
   using SubscriptionId = std::size_t;
 
+  // Invalid subscription ID — returned when subscribe() receives a null handler.
+  static constexpr SubscriptionId invalid_id = 0;
+
   // Subscribe to a topic. Returns an ID for unsubscribing.
+  // Returns invalid_id (0) if handler is empty.
   [[nodiscard]] SubscriptionId subscribe(const std::string& topic,
                                          Handler handler) {
+    if (!handler) return invalid_id;
     SubscriptionId id = next_id_++;
     subscriptions_[topic].push_back({id, std::move(handler)});
     return id;
@@ -44,10 +49,13 @@ class EventBus {
   }
 
   // Publish an event to all subscribers of the given topic.
+  // Safe to call subscribe/unsubscribe from within handlers.
   void publish(const std::string& topic, const std::string& payload = {}) {
     auto it = subscriptions_.find(topic);
     if (it == subscriptions_.end()) return;
-    for (const auto& sub : it->second) {
+    // Snapshot: handlers may subscribe/unsubscribe during iteration.
+    auto snapshot = it->second;
+    for (const auto& sub : snapshot) {
       sub.handler(topic, payload);
     }
   }
@@ -65,7 +73,7 @@ class EventBus {
     Handler handler;
   };
 
-  SubscriptionId next_id_ = 0;
+  SubscriptionId next_id_ = 1;  // 0 is reserved as invalid_id
   std::unordered_map<std::string, std::vector<Subscription>> subscriptions_;
 };
 

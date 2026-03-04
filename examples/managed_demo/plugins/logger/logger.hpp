@@ -28,7 +28,7 @@ class Logger : public ILogger,
  private:
   std::string tag_ = "LOG";
   plugin_arch::EventBus* bus_ = nullptr;
-  plugin_arch::EventBus::SubscriptionId sub_id_ = 0;
+  plugin_arch::EventBus::SubscriptionId sub_id_ = plugin_arch::EventBus::invalid_id;
 };
 
 }  // namespace examples

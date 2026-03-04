@@ -26,9 +26,11 @@ void Logger::on_init() {
 }
 
 void Logger::on_shutdown() {
-  if (bus_) {
+  if (bus_ && sub_id_ != plugin_arch::EventBus::invalid_id) {
     bus_->unsubscribe(sub_id_);
+    sub_id_ = plugin_arch::EventBus::invalid_id;
   }
+  bus_ = nullptr;
   std::cout << "  [Logger] shutting down\n";
 }
 

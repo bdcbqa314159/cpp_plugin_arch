@@ -15,10 +15,12 @@
 
 #include <future>
 #include <memory>
+#include <optional>
 #include <queue>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "EventBus.hpp"
@@ -56,6 +58,8 @@ class PluginManager {
   void load_all(const std::filesystem::path& directory,
                 const ConfigMap& config_map = {},
                 LoadPolicy policy = LoadPolicy::strict) {
+    load_errors_.clear();
+
     // --- Discovery ---
     PluginRegistry registry;
     (void)registry.scan(directory);
@@ -89,15 +93,37 @@ class PluginManager {
     auto levels = topological_sort_levels(infos, type_to_index);
 
     // --- Load level by level, wire mixins ---
+    // In best_effort mode, track failed types so dependents are skipped.
+    std::unordered_set<std::string> failed_types;
+
     for (const auto& level : levels) {
       for (std::size_t idx : level) {
+        const auto& info = infos[idx];
+
         if (policy == LoadPolicy::strict) {
-          load_and_wire(infos[idx].entry, config_map);
+          load_and_wire(info.entry, config_map);
         } else {
+          // Skip if any dependency failed
+          bool dep_failed = false;
+          for (const auto& dep : info.deps) {
+            if (failed_types.count(dep)) {
+              dep_failed = true;
+              break;
+            }
+          }
+          if (dep_failed) {
+            failed_types.insert(info.entry.type);
+            load_errors_.push_back(
+                {info.entry.path,
+                 "skipped: dependency unavailable"});
+            continue;
+          }
+
           try {
-            load_and_wire(infos[idx].entry, config_map);
+            load_and_wire(info.entry, config_map);
           } catch (const std::exception& e) {
-            load_errors_.push_back({infos[idx].entry.path, e.what()});
+            failed_types.insert(info.entry.type);
+            load_errors_.push_back({info.entry.path, e.what()});
           }
         }
       }
@@ -108,7 +134,10 @@ class PluginManager {
   // topological level. Plugins at the same level have no dependencies on
   // each other and can be loaded concurrently.
   void load_all_async(const std::filesystem::path& directory,
-                      const ConfigMap& config_map = {}) {
+                      const ConfigMap& config_map = {},
+                      LoadPolicy policy = LoadPolicy::strict) {
+    load_errors_.clear();
+
     PluginRegistry registry;
     (void)registry.scan(directory);
 
@@ -135,40 +164,98 @@ class PluginManager {
 
     auto levels = topological_sort_levels(infos, type_to_index);
 
+    // Track failed types for best_effort dependency cascade.
+    std::unordered_set<std::string> failed_types;
+
     // Load each level: plugins within a level are independent and can
     // be loaded in parallel. Wiring (mixin injection) is sequential
     // since it touches shared state (locator_, event_bus_).
     for (const auto& level : levels) {
       if (level.size() == 1) {
-        load_and_wire(infos[level[0]].entry, config_map);
+        const auto& info = infos[level[0]];
+
+        if (policy == LoadPolicy::best_effort) {
+          bool dep_failed = false;
+          for (const auto& dep : info.deps) {
+            if (failed_types.count(dep)) { dep_failed = true; break; }
+          }
+          if (dep_failed) {
+            failed_types.insert(info.entry.type);
+            load_errors_.push_back(
+                {info.entry.path, "skipped: dependency unavailable"});
+            continue;
+          }
+          try {
+            load_and_wire(info.entry, config_map);
+          } catch (const std::exception& e) {
+            failed_types.insert(info.entry.type);
+            load_errors_.push_back({info.entry.path, e.what()});
+          }
+        } else {
+          load_and_wire(info.entry, config_map);
+        }
         continue;
+      }
+
+      // Filter out plugins with failed dependencies (best_effort)
+      std::vector<std::size_t> loadable;
+      for (std::size_t idx : level) {
+        const auto& info = infos[idx];
+        if (policy == LoadPolicy::best_effort) {
+          bool dep_failed = false;
+          for (const auto& dep : info.deps) {
+            if (failed_types.count(dep)) { dep_failed = true; break; }
+          }
+          if (dep_failed) {
+            failed_types.insert(info.entry.type);
+            load_errors_.push_back(
+                {info.entry.path, "skipped: dependency unavailable"});
+            continue;
+          }
+        }
+        loadable.push_back(idx);
       }
 
       // Parallel load: dlopen + get_instance on separate threads
       struct LoadResult {
-        PluginLoader<IPlugin> loader;
+        std::optional<PluginLoader<IPlugin>> loader;
         std::shared_ptr<IPlugin> instance;
+        std::size_t info_idx;
+        std::string error;
       };
 
       std::vector<std::future<LoadResult>> futures;
-      futures.reserve(level.size());
+      futures.reserve(loadable.size());
 
-      for (std::size_t idx : level) {
+      for (std::size_t idx : loadable) {
         const auto& entry = infos[idx].entry;
         futures.push_back(std::async(std::launch::async,
-            [&entry]() -> LoadResult {
-              PluginLoader<IPlugin> loader(entry.path.string());
-              auto instance = loader.get_instance();
-              return {std::move(loader), std::move(instance)};
+            [&entry, idx]() -> LoadResult {
+              try {
+                PluginLoader<IPlugin> loader(entry.path.string());
+                auto instance = loader.get_instance();
+                return {std::move(loader), std::move(instance), idx, {}};
+              } catch (const std::exception& e) {
+                return {std::nullopt, nullptr, idx, e.what()};
+              }
             }));
       }
 
       // Collect results and wire sequentially
-      for (std::size_t i = 0; i < level.size(); ++i) {
-        auto result = futures[i].get();
-        wire_instance(result.instance, infos[level[i]].entry, config_map);
+      for (auto& fut : futures) {
+        auto result = fut.get();
+        if (!result.error.empty()) {
+          if (policy == LoadPolicy::best_effort) {
+            failed_types.insert(infos[result.info_idx].entry.type);
+            load_errors_.push_back(
+                {infos[result.info_idx].entry.path, result.error});
+            continue;
+          }
+          throw std::runtime_error(result.error);
+        }
+        wire_instance(result.instance, infos[result.info_idx].entry, config_map);
         locator_.add(result.instance);
-        loaders_.push_back(std::move(result.loader));
+        loaders_.push_back(std::move(*result.loader));
         instances_.push_back(std::move(result.instance));
       }
     }

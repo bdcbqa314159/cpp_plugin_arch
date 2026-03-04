@@ -64,6 +64,59 @@ TEST_CASE("EventBus subscriber_count", "[eventbus]") {
   CHECK(bus.subscriber_count("test") == 2);
 }
 
+TEST_CASE("EventBus subscribe during publish is safe", "[eventbus]") {
+  EventBus bus;
+  int count = 0;
+
+  (void)bus.subscribe("test", [&](const std::string&, const std::string&) {
+    ++count;
+    // Subscribe during publish — must not invalidate iteration
+    (void)bus.subscribe("test", [&](const std::string&, const std::string&) {
+      ++count;
+    });
+  });
+
+  bus.publish("test");
+  // Only the original handler fires (snapshot taken before iteration)
+  CHECK(count == 1);
+
+  // Second publish: both handlers fire
+  bus.publish("test");
+  CHECK(count == 3);
+}
+
+TEST_CASE("EventBus unsubscribe during publish is safe", "[eventbus]") {
+  EventBus bus;
+  int count = 0;
+  EventBus::SubscriptionId id2 = EventBus::invalid_id;
+
+  (void)bus.subscribe("test", [&](const std::string&, const std::string&) {
+    ++count;
+    // Unsubscribe the other handler during publish
+    bus.unsubscribe(id2);
+  });
+
+  id2 = bus.subscribe("test", [&](const std::string&, const std::string&) {
+    ++count;
+  });
+
+  bus.publish("test");
+  // Both fire (snapshot was taken before the unsubscribe)
+  CHECK(count == 2);
+
+  // Second publish: only the first handler fires (id2 was unsubscribed)
+  bus.publish("test");
+  CHECK(count == 3);
+}
+
+TEST_CASE("EventBus subscribe with null handler returns invalid_id", "[eventbus]") {
+  EventBus bus;
+  EventBus::Handler null_handler;
+  auto id = bus.subscribe("test", null_handler);
+  CHECK(id == EventBus::invalid_id);
+  CHECK(bus.subscriber_count("test") == 0);
+}
+
 TEST_CASE("EventBus clear removes all subscriptions", "[eventbus]") {
   EventBus bus;
   int count = 0;
