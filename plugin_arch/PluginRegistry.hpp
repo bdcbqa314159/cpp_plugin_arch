@@ -16,6 +16,7 @@
 
 #include "DynamicLibrary.hpp"
 #include "IPlugin.hpp"
+#include "IPluginMetadata.hpp"
 #include "PluginError.hpp"
 #include "platform/shared_lib.hpp"
 
@@ -27,6 +28,12 @@ struct PluginEntry {
   std::string name;
   std::string version;
   std::string type;
+
+  // Extended metadata — populated when plugin implements IPluginMetadata.
+  std::string author;
+  std::string description;
+  std::string license;
+  std::vector<std::string> capabilities;
 };
 
 struct ScanError {
@@ -119,6 +126,15 @@ class PluginRegistry {
     entry.name = raw->name();
     entry.version = raw->version();
     entry.type = raw->type();
+
+    // Probe for extended metadata
+    auto* meta = dynamic_cast<IPluginMetadata*>(raw);
+    if (meta) {
+      entry.author = meta->author();
+      entry.description = meta->description();
+      entry.license = meta->license();
+      entry.capabilities = meta->capabilities();
+    }
 
     return entry;
   }

@@ -3,7 +3,6 @@
 #include <iostream>
 #include <sstream>
 
-#include "ILogger.hpp"
 #include "IProcessor.hpp"
 #include "PluginExport.hpp"
 
@@ -17,6 +16,10 @@ void Aggregator::set_service_locator(plugin_arch::ServiceLocator& locator) {
   locator_ = &locator;
 }
 
+void Aggregator::set_event_bus(plugin_arch::EventBus& bus) {
+  bus_ = &bus;
+}
+
 void Aggregator::on_init() {
   std::cout << "  [Aggregator] initialized\n";
 }
@@ -26,11 +29,11 @@ void Aggregator::on_shutdown() {
 }
 
 std::string Aggregator::aggregate(const std::vector<std::string>& items) {
-  auto logger = locator_->get<ILogger>("logger");
   auto processor = locator_->get<IProcessor>("processor");
 
-  if (logger) {
-    logger->log("aggregating " + std::to_string(items.size()) + " items");
+  // Publish via event bus instead of calling logger directly
+  if (bus_) {
+    bus_->publish("log", "aggregating " + std::to_string(items.size()) + " items");
   }
 
   // Process items through the processor service
@@ -48,8 +51,8 @@ std::string Aggregator::aggregate(const std::vector<std::string>& items) {
     result << "  [" << i << "] " << processed[i] << "\n";
   }
 
-  if (logger) {
-    logger->log("aggregation complete");
+  if (bus_) {
+    bus_->publish("log", "aggregation complete");
   }
 
   return result.str();

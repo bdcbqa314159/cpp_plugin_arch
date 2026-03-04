@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 
+#include "ISerializable.hpp"
 #include "PluginLoader.hpp"
 
 namespace plugin_arch {
@@ -57,11 +58,31 @@ class HotPluginLoader {
   }
 
   // Force reload regardless of modification time.
+  // If the current instance implements ISerializable, state is preserved.
   void reload() {
+    // Save state from old instance if it supports serialization
+    std::string saved_state;
+    bool has_state = false;
+    if (instance_) {
+      auto* serializable = dynamic_cast<ISerializable*>(instance_.get());
+      if (serializable) {
+        saved_state = serializable->save_state();
+        has_state = true;
+      }
+    }
+
     // Create the new loader first — if this throws, current state is untouched.
     auto new_loader = std::make_unique<PluginLoader<T>>(
         library_path_, alloc_symbol_, dealloc_symbol_);
     auto new_instance = new_loader->get_instance();
+
+    // Restore state into the new instance
+    if (has_state) {
+      auto* serializable = dynamic_cast<ISerializable*>(new_instance.get());
+      if (serializable) {
+        serializable->restore_state(saved_state);
+      }
+    }
 
     // Success — swap in the new version.
     // Old instances (if any) keep the old library alive via their deleters.

@@ -1,18 +1,19 @@
 // High-level plugin orchestrator.
 //
-// Composes PluginRegistry, PluginLoader, ServiceLocator and the opt-in mixins
-// (IConfigurable, IServiceAware, ILifecycleAware, IDependencyAware) into a
-// single component that handles:
+// Composes PluginRegistry, PluginLoader, ServiceLocator, EventBus and the
+// opt-in mixins (IConfigurable, IServiceAware, IEventAware, ILifecycleAware,
+// IDependencyAware) into a single component that handles:
 //   - Discovery via PluginRegistry::scan()
 //   - Dependency ordering via topological sort (Kahn's algorithm)
 //   - Loading via PluginLoader<IPlugin>
-//   - Wiring: configure() → set_service_locator() → on_init()
+//   - Wiring: configure() → set_service_locator() → set_event_bus() → on_init()
 //   - Shutdown in reverse order
 //
 // Throws PluginError on load failures, std::runtime_error on cycles / missing deps.
 
 #pragma once
 
+#include <future>
 #include <memory>
 #include <queue>
 #include <stdexcept>
@@ -20,8 +21,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include "EventBus.hpp"
 #include "IConfigurable.hpp"
 #include "IDependencyAware.hpp"
+#include "IEventAware.hpp"
 #include "ILifecycleAware.hpp"
 #include "IPlugin.hpp"
 #include "IServiceAware.hpp"
@@ -30,6 +33,11 @@
 #include "ServiceLocator.hpp"
 
 namespace plugin_arch {
+
+enum class LoadPolicy {
+  strict,       // throw on first failure (default)
+  best_effort   // skip failed plugins, record errors
+};
 
 class PluginManager {
  private:
@@ -44,8 +52,10 @@ class PluginManager {
 
   // Scan a directory and load all discovered plugins in dependency order.
   // config_map provides optional per-plugin configuration keyed by plugin name.
+  // policy: strict (throw on first failure) or best_effort (skip, record errors).
   void load_all(const std::filesystem::path& directory,
-                const ConfigMap& config_map = {}) {
+                const ConfigMap& config_map = {},
+                LoadPolicy policy = LoadPolicy::strict) {
     // --- Discovery ---
     PluginRegistry registry;
     (void)registry.scan(directory);
@@ -76,42 +86,91 @@ class PluginManager {
     }
 
     // --- Topological sort (Kahn's algorithm) ---
-    auto sorted = topological_sort(infos, type_to_index);
+    auto levels = topological_sort_levels(infos, type_to_index);
 
-    // --- Load in order, wire mixins ---
-    for (std::size_t idx : sorted) {
-      const auto& info = infos[idx];
-      const auto& entry = info.entry;
-
-      PluginLoader<IPlugin> loader(entry.path.string());
-      auto instance = loader.get_instance();
-
-      // IConfigurable — configure before anything else
-      auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
-      if (configurable) {
-        if (auto it = config_map.find(entry.name); it != config_map.end()) {
-          configurable->configure(it->second);
+    // --- Load level by level, wire mixins ---
+    for (const auto& level : levels) {
+      for (std::size_t idx : level) {
+        if (policy == LoadPolicy::strict) {
+          load_and_wire(infos[idx].entry, config_map);
+        } else {
+          try {
+            load_and_wire(infos[idx].entry, config_map);
+          } catch (const std::exception& e) {
+            load_errors_.push_back({infos[idx].entry.path, e.what()});
+          }
         }
       }
+    }
+  }
 
-      // IServiceAware — inject the locator
-      auto* aware = dynamic_cast<IServiceAware*>(instance.get());
-      if (aware) {
-        aware->set_service_locator(locator_);
+  // Same as load_all() but parallelizes plugin loading within each
+  // topological level. Plugins at the same level have no dependencies on
+  // each other and can be loaded concurrently.
+  void load_all_async(const std::filesystem::path& directory,
+                      const ConfigMap& config_map = {}) {
+    PluginRegistry registry;
+    (void)registry.scan(directory);
+
+    const auto& entries = registry.entries();
+    if (entries.empty()) return;
+
+    std::vector<PluginInfo> infos;
+    std::unordered_map<std::string, std::size_t> type_to_index;
+
+    for (const auto& e : entries) {
+      PluginInfo info;
+      info.entry = e;
+
+      PluginLoader<IPlugin> probe_loader(e.path.string());
+      auto probe_instance = probe_loader.get_instance();
+      auto* dep_aware = dynamic_cast<IDependencyAware*>(probe_instance.get());
+      if (dep_aware) {
+        info.deps = dep_aware->dependencies();
       }
 
-      // ILifecycleAware — call on_init()
-      auto* lifecycle = dynamic_cast<ILifecycleAware*>(instance.get());
-      if (lifecycle) {
-        lifecycle->on_init();
+      type_to_index[e.type] = infos.size();
+      infos.push_back(std::move(info));
+    }
+
+    auto levels = topological_sort_levels(infos, type_to_index);
+
+    // Load each level: plugins within a level are independent and can
+    // be loaded in parallel. Wiring (mixin injection) is sequential
+    // since it touches shared state (locator_, event_bus_).
+    for (const auto& level : levels) {
+      if (level.size() == 1) {
+        load_and_wire(infos[level[0]].entry, config_map);
+        continue;
       }
 
-      // Register in the locator so downstream plugins can discover it
-      locator_.add(instance);
+      // Parallel load: dlopen + get_instance on separate threads
+      struct LoadResult {
+        PluginLoader<IPlugin> loader;
+        std::shared_ptr<IPlugin> instance;
+      };
 
-      // Store for lifetime management and ordered shutdown
-      loaders_.push_back(std::move(loader));
-      instances_.push_back(std::move(instance));
+      std::vector<std::future<LoadResult>> futures;
+      futures.reserve(level.size());
+
+      for (std::size_t idx : level) {
+        const auto& entry = infos[idx].entry;
+        futures.push_back(std::async(std::launch::async,
+            [&entry]() -> LoadResult {
+              PluginLoader<IPlugin> loader(entry.path.string());
+              auto instance = loader.get_instance();
+              return {std::move(loader), std::move(instance)};
+            }));
+      }
+
+      // Collect results and wire sequentially
+      for (std::size_t i = 0; i < level.size(); ++i) {
+        auto result = futures[i].get();
+        wire_instance(result.instance, infos[level[i]].entry, config_map);
+        locator_.add(result.instance);
+        loaders_.push_back(std::move(result.loader));
+        instances_.push_back(std::move(result.instance));
+      }
     }
   }
 
@@ -126,28 +185,77 @@ class PluginManager {
     instances_.clear();
     loaders_.clear();
     locator_.clear();
+    event_bus_.clear();
+    load_errors_.clear();
   }
 
   [[nodiscard]] ServiceLocator& locator() { return locator_; }
   [[nodiscard]] const ServiceLocator& locator() const { return locator_; }
 
+  [[nodiscard]] EventBus& event_bus() { return event_bus_; }
+  [[nodiscard]] const EventBus& event_bus() const { return event_bus_; }
+
   [[nodiscard]] const std::vector<std::shared_ptr<IPlugin>>& instances() const {
     return instances_;
   }
 
+  // Errors from best_effort loading (empty in strict mode).
+  [[nodiscard]] const std::vector<ScanError>& load_errors() const {
+    return load_errors_;
+  }
+
  private:
   ServiceLocator locator_;
+  EventBus event_bus_;
   std::vector<PluginLoader<IPlugin>> loaders_;
   std::vector<std::shared_ptr<IPlugin>> instances_;
+  std::vector<ScanError> load_errors_;
 
-  // Kahn's algorithm — returns indices into infos in topological order.
+  // Wire all opt-in mixins on an instance.
+  void wire_instance(std::shared_ptr<IPlugin>& instance,
+                     const PluginEntry& entry,
+                     const ConfigMap& config_map) {
+    auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
+    if (configurable) {
+      if (auto it = config_map.find(entry.name); it != config_map.end()) {
+        configurable->configure(it->second);
+      }
+    }
+
+    auto* aware = dynamic_cast<IServiceAware*>(instance.get());
+    if (aware) {
+      aware->set_service_locator(locator_);
+    }
+
+    auto* event_aware = dynamic_cast<IEventAware*>(instance.get());
+    if (event_aware) {
+      event_aware->set_event_bus(event_bus_);
+    }
+
+    auto* lifecycle = dynamic_cast<ILifecycleAware*>(instance.get());
+    if (lifecycle) {
+      lifecycle->on_init();
+    }
+  }
+
+  // Load a single plugin and wire it.
+  void load_and_wire(const PluginEntry& entry, const ConfigMap& config_map) {
+    PluginLoader<IPlugin> loader(entry.path.string());
+    auto instance = loader.get_instance();
+    wire_instance(instance, entry, config_map);
+    locator_.add(instance);
+    loaders_.push_back(std::move(loader));
+    instances_.push_back(std::move(instance));
+  }
+
+  // Kahn's algorithm — returns indices grouped by topological level.
+  // Plugins within a level have no dependencies on each other.
   // Throws on cycles or missing dependencies.
-  static std::vector<std::size_t> topological_sort(
+  static std::vector<std::vector<std::size_t>> topological_sort_levels(
       const std::vector<PluginInfo>& infos,
       const std::unordered_map<std::string, std::size_t>& type_to_index) {
     const std::size_t n = infos.size();
 
-    // Build adjacency list and in-degree count
     std::vector<std::vector<std::size_t>> adj(n);
     std::vector<std::size_t> in_degree(n, 0);
 
@@ -160,12 +268,11 @@ class PluginManager {
               "' depends on missing service type: " + dep_type);
         }
         std::size_t dep_idx = it->second;
-        adj[dep_idx].push_back(i);  // dep_idx must come before i
+        adj[dep_idx].push_back(i);
         ++in_degree[i];
       }
     }
 
-    // Seed queue with nodes that have no dependencies
     std::queue<std::size_t> ready;
     for (std::size_t i = 0; i < n; ++i) {
       if (in_degree[i] == 0) {
@@ -173,23 +280,29 @@ class PluginManager {
       }
     }
 
-    std::vector<std::size_t> order;
-    order.reserve(n);
+    std::vector<std::vector<std::size_t>> levels;
+    std::size_t processed = 0;
 
     while (!ready.empty()) {
-      std::size_t cur = ready.front();
-      ready.pop();
-      order.push_back(cur);
+      // Drain all currently ready nodes — they form one level
+      std::vector<std::size_t> level;
+      std::size_t level_size = ready.size();
+      for (std::size_t i = 0; i < level_size; ++i) {
+        std::size_t cur = ready.front();
+        ready.pop();
+        level.push_back(cur);
+        ++processed;
 
-      for (std::size_t next : adj[cur]) {
-        if (--in_degree[next] == 0) {
-          ready.push(next);
+        for (std::size_t next : adj[cur]) {
+          if (--in_degree[next] == 0) {
+            ready.push(next);
+          }
         }
       }
+      levels.push_back(std::move(level));
     }
 
-    if (order.size() != n) {
-      // Find plugins involved in the cycle for a useful error message
+    if (processed != n) {
       std::string cycle_plugins;
       for (std::size_t i = 0; i < n; ++i) {
         if (in_degree[i] > 0) {
@@ -201,7 +314,7 @@ class PluginManager {
                                cycle_plugins);
     }
 
-    return order;
+    return levels;
   }
 };
 

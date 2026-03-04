@@ -12,11 +12,23 @@ void Logger::configure(const plugin_arch::PluginConfig& config) {
   }
 }
 
+void Logger::set_event_bus(plugin_arch::EventBus& bus) {
+  bus_ = &bus;
+  // Subscribe to "log" topic — any plugin can publish log messages
+  sub_id_ = bus_->subscribe("log",
+      [this](const std::string& /*topic*/, const std::string& payload) {
+        log(payload);
+      });
+}
+
 void Logger::on_init() {
   std::cout << "  [Logger] initialized with tag: " << tag_ << "\n";
 }
 
 void Logger::on_shutdown() {
+  if (bus_) {
+    bus_->unsubscribe(sub_id_);
+  }
   std::cout << "  [Logger] shutting down\n";
 }
 
