@@ -132,7 +132,7 @@ class PluginManager {
                 LoadPolicy policy = LoadPolicy::strict) {
     load_errors_.clear();
 
-    auto [infos, levels] = discover_and_sort(directory);
+    auto [infos, levels] = discover_and_sort(directory, policy, &load_errors_);
 
     // Track failed types so dependents are skipped in best_effort mode.
     std::unordered_set<std::string> failed_types;
@@ -170,7 +170,7 @@ class PluginManager {
                          LoadPolicy policy = LoadPolicy::strict) {
     load_errors_.clear();
 
-    auto [infos, levels] = discover_and_sort(directory);
+    auto [infos, levels] = discover_and_sort(directory, policy, &load_errors_);
 
     std::unordered_set<std::string> failed_types;
 
@@ -298,7 +298,10 @@ class PluginManager {
     std::vector<std::vector<std::size_t>> levels;
   };
 
-  static DiscoveryResult discover_and_sort(const std::filesystem::path& directory) {
+  static DiscoveryResult discover_and_sort(
+      const std::filesystem::path& directory,
+      LoadPolicy policy = LoadPolicy::strict,
+      std::vector<ErrorRecord>* errors_out = nullptr) {
     PluginRegistry registry;
     (void)registry.scan(directory);
 
@@ -319,7 +322,22 @@ class PluginManager {
         info.deps = dep_aware->dependencies();
       }
 
-      type_to_index[e.type] = infos.size();
+      auto [it, inserted] = type_to_index.try_emplace(e.type, infos.size());
+      if (!inserted) {
+        if (policy == LoadPolicy::strict) {
+          throw std::runtime_error(
+              "Duplicate plugin type '" + e.type + "': '" +
+              infos[it->second].entry.name + "' and '" + e.name + "'");
+        }
+        // best_effort: skip duplicate, record error
+        if (errors_out) {
+          errors_out->push_back(
+              {e.path, "duplicate plugin type '" + e.type +
+                       "', already provided by '" +
+                       infos[it->second].entry.name + "'"});
+        }
+        continue;
+      }
       infos.push_back(std::move(info));
     }
 

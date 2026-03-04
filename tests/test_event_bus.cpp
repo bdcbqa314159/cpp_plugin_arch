@@ -117,6 +117,22 @@ TEST_CASE("EventBus subscribe with null handler throws", "[eventbus]") {
   CHECK(bus.subscriber_count("test") == 0);
 }
 
+TEST_CASE("EventBus throwing handler does not block other handlers", "[eventbus]") {
+  EventBus bus;
+  int count = 0;
+
+  (void)bus.subscribe("test", [](const std::string&, const std::string&) {
+    throw std::runtime_error("boom");
+  });
+  (void)bus.subscribe("test", [&](const std::string&, const std::string&) {
+    ++count;
+  });
+
+  // Second handler should still fire despite first throwing
+  bus.publish("test");
+  CHECK(count == 1);
+}
+
 TEST_CASE("EventBus clear removes all subscriptions", "[eventbus]") {
   EventBus bus;
   int count = 0;

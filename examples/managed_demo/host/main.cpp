@@ -36,10 +36,15 @@ int main(int argc, char* argv[]) {
 
   plugin_arch::PluginManager manager;
   try {
-    manager.load_all(plugin_dir, config);
+    manager.load_all(plugin_dir, config, plugin_arch::LoadPolicy::best_effort);
   } catch (const std::exception& e) {
     std::cerr << "Failed to load plugins: " << e.what() << "\n";
     return 1;
+  }
+
+  if (!manager.load_errors().empty()) {
+    std::cout << "  (" << manager.load_errors().size()
+              << " plugins skipped, use strict mode for details)\n";
   }
 
   std::cout << "\nLoaded " << manager.instances().size() << " plugins\n\n";

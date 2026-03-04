@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <filesystem>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -90,9 +91,15 @@ TEST_CASE("Topological sort: empty input", "[topo]") {
   CHECK(levels.empty());
 }
 
+TEST_CASE("Topological sort: self-dependency is a cycle", "[topo]") {
+  auto [infos, idx] = make_graph({{"A", {"A"}}});
+  CHECK_THROWS_AS(topological_sort_levels(infos, idx), std::runtime_error);
+}
+
 TEST_CASE("PluginManager load_all with empty directory is a no-op", "[manager]") {
   PluginManager manager;
-  CHECK_NOTHROW(manager.load_all("/tmp"));
+  auto tmp = std::filesystem::temp_directory_path();
+  CHECK_NOTHROW(manager.load_all(tmp));
   CHECK(manager.instances().empty());
 }
 
