@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,10 +27,12 @@ class EventBus {
   static constexpr SubscriptionId invalid_id = 0;
 
   // Subscribe to a topic. Returns an ID for unsubscribing.
-  // Returns invalid_id (0) if handler is empty.
+  // Throws std::invalid_argument if handler is empty.
   [[nodiscard]] SubscriptionId subscribe(const std::string& topic,
                                          Handler handler) {
-    if (!handler) return invalid_id;
+    if (!handler) {
+      throw std::invalid_argument("EventBus::subscribe: handler must not be null");
+    }
     SubscriptionId id = next_id_++;
     subscriptions_[topic].push_back({id, std::move(handler)});
     return id;

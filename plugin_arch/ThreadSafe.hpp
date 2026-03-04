@@ -94,9 +94,9 @@ class ThreadSafe<PluginRegistry> {
     return std::vector<PluginEntry>(inner_.entries().begin(), inner_.entries().end());
   }
 
-  [[nodiscard]] std::vector<ScanError> errors() const {
+  [[nodiscard]] std::vector<ErrorRecord> errors() const {
     std::shared_lock lock(mutex_);
-    return std::vector<ScanError>(inner_.errors().begin(), inner_.errors().end());
+    return std::vector<ErrorRecord>(inner_.errors().begin(), inner_.errors().end());
   }
 
   void clear() {

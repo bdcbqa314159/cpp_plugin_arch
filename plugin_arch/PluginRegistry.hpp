@@ -36,7 +36,7 @@ struct PluginEntry {
   std::vector<std::string> capabilities;
 };
 
-struct ScanError {
+struct ErrorRecord {
   std::filesystem::path path;
   std::string reason;
 };
@@ -94,7 +94,7 @@ class PluginRegistry {
   }
 
   [[nodiscard]] const std::vector<PluginEntry>& entries() const { return entries_; }
-  [[nodiscard]] const std::vector<ScanError>& errors() const { return errors_; }
+  [[nodiscard]] const std::vector<ErrorRecord>& errors() const { return errors_; }
 
   void clear() {
     entries_.clear();
@@ -103,7 +103,7 @@ class PluginRegistry {
 
  private:
   std::vector<PluginEntry> entries_;
-  std::vector<ScanError> errors_;
+  std::vector<ErrorRecord> errors_;
 
   // Probe a single shared library for plugin metadata.
   // DynamicLibrary's destructor handles dlclose — no manual cleanup needed.

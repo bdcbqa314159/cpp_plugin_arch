@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <stdexcept>
 
 #include "EventBus.hpp"
 
@@ -109,11 +110,10 @@ TEST_CASE("EventBus unsubscribe during publish is safe", "[eventbus]") {
   CHECK(count == 3);
 }
 
-TEST_CASE("EventBus subscribe with null handler returns invalid_id", "[eventbus]") {
+TEST_CASE("EventBus subscribe with null handler throws", "[eventbus]") {
   EventBus bus;
   EventBus::Handler null_handler;
-  auto id = bus.subscribe("test", null_handler);
-  CHECK(id == EventBus::invalid_id);
+  CHECK_THROWS_AS(bus.subscribe("test", null_handler), std::invalid_argument);
   CHECK(bus.subscriber_count("test") == 0);
 }
 
