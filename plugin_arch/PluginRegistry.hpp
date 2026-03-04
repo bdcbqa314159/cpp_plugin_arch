@@ -11,12 +11,12 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "DynamicLibrary.hpp"
 #include "IPlugin.hpp"
+#include "PluginError.hpp"
 #include "platform/shared_lib.hpp"
 
 namespace plugin_arch {
@@ -43,7 +43,7 @@ class PluginRegistry {
     namespace fs = std::filesystem;
 
     if (!fs::is_directory(directory)) {
-      throw std::runtime_error("Not a directory: " + directory.string());
+      throw LoadError::make(directory.string(), "not a directory");
     }
 
     std::size_t found = 0;
@@ -108,7 +108,7 @@ class PluginRegistry {
 
     IPlugin* raw = alloc();
     if (!raw) {
-      throw std::runtime_error("allocator() returned nullptr");
+      throw AllocationError::make(path.string());
     }
 
     // unique_ptr ensures dealloc is called even if metadata copy throws.

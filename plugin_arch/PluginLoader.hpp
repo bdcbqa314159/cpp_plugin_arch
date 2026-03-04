@@ -8,11 +8,12 @@
 #pragma once
 
 #include <memory>
-#include <stdexcept>
 #include <string>
+#include <typeinfo>
 
 #include "DynamicLibrary.hpp"
 #include "IPlugin.hpp"
+#include "PluginError.hpp"
 
 namespace plugin_arch {
 
@@ -40,15 +41,13 @@ class PluginLoader {
   [[nodiscard]] std::shared_ptr<T> get_instance() {
     IPlugin* raw = alloc_();
     if (!raw) {
-      throw std::runtime_error("allocator returned nullptr for: " +
-                               lib_->path());
+      throw AllocationError::make(lib_->path());
     }
 
     T* typed = dynamic_cast<T*>(raw);
     if (!typed) {
       dealloc_(raw);
-      throw std::runtime_error("plugin does not implement requested interface: " +
-                               lib_->path());
+      throw InterfaceError::make(lib_->path(), typeid(T).name());
     }
 
     // Capture a shared reference to the library so it stays loaded as long

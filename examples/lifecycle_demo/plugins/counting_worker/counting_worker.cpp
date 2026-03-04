@@ -8,11 +8,21 @@
 
 namespace examples {
 
+void CountingWorker::configure(const plugin_arch::PluginConfig& config) {
+  if (auto it = config.find("prefix"); it != config.end()) {
+    prefix_ = it->second;
+    std::cout << "  [CountingWorker] configured prefix: \"" << prefix_ << "\"\n";
+  }
+}
+
 std::string CountingWorker::process(const std::string& item) {
   ++counter_;
   std::string result = item;
   std::transform(result.begin(), result.end(), result.begin(),
                  [](unsigned char c) { return std::toupper(c); });
+  if (!prefix_.empty()) {
+    result = prefix_ + result;
+  }
   return result;
 }
 
