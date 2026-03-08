@@ -1,75 +1,58 @@
 # cpp_plugin_arch
 
-A C++20 plugin architecture library: runtime polymorphism across shared library boundaries. The host loads plugins at runtime knowing only the interface — no recompilation needed when plugins are added or swapped.
+A C++20 header-only plugin architecture library: runtime polymorphism across shared library boundaries. The host loads plugins at runtime knowing only the interface — no recompilation needed when plugins are added or swapped.
 
 ## Project structure
 
 ```
 cpp_plugin_arch/
-├── plugin_arch/                            # Reusable header-only library
-│   ├── plugin_arch                         # Umbrella include
+├── plugin_arch/                            # Header-only library (31 headers)
+│   ├── plugin_arch.hpp                     # Umbrella include
+│   │
+│   │ ── Core ──
 │   ├── IPlugin.hpp                         # Base interface (name, version, type)
-│   ├── ILifecycleAware.hpp                 # Opt-in lifecycle hooks (on_init/on_shutdown)
 │   ├── PluginLoader.hpp                    # RAII cross-platform loader (dlopen/LoadLibrary)
-│   ├── HotPluginLoader.hpp                 # Hot-reload wrapper (polling + copy-on-swap)
-│   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
-│   ├── ServiceLocator.hpp                  # Plugin-to-plugin communication
 │   ├── PluginExport.hpp                    # REGISTER_PLUGIN() macro
 │   ├── DynamicLibrary.hpp                  # Non-templated RAII loader (no type assumptions)
 │   ├── PluginDescriptor.hpp                # POD descriptor + REGISTER_DYNAMIC_PLUGIN() macro
+│   ├── DynamicPluginAdapter.hpp            # Wraps DynamicLibrary as IPlugin
+│   │
+│   │ ── Discovery & orchestration ──
+│   ├── PluginRegistry.hpp                  # Directory scanner + metadata index
+│   ├── PluginManager.hpp                   # Full orchestration (deps, config, lifecycle, wiring)
+│   ├── HotPluginLoader.hpp                 # Hot-reload wrapper (polling + copy-on-swap)
+│   │
+│   │ ── Opt-in mixins (detected via dynamic_cast) ──
+│   ├── ILifecycleAware.hpp                 # on_init() / on_shutdown() hooks
+│   ├── IConfigurable.hpp                   # Key-value configuration
+│   ├── IConfigSchema.hpp                   # Config schema with defaults + required keys
+│   ├── IDependencyAware.hpp                # Declare dependency types for topo sort
+│   ├── IServiceAware.hpp                   # Receive ServiceLocator injection
+│   ├── IEventAware.hpp                     # Receive EventBus injection
+│   ├── IHealthAware.hpp                    # Health check reporting
+│   ├── IConflictAware.hpp                  # Declare conflicting plugin types
+│   ├── IPluginMetadata.hpp                 # Author, description, license, capabilities
+│   ├── ISerializable.hpp                   # State save/restore
+│   ├── PluginObserver.hpp                  # Lifecycle event callbacks (load/unload/enable/disable)
+│   │
+│   │ ── Communication ──
+│   ├── ServiceLocator.hpp                  # Plugin-to-plugin service discovery
+│   ├── EventBus.hpp                        # Pub-sub (string, typed, vetoable, prioritized)
+│   │
+│   │ ── Infrastructure ──
+│   ├── SemVer.hpp                          # Semantic versioning parser + comparator
+│   ├── PluginError.hpp                     # Error hierarchy (LoadError, SymbolError, etc.)
+│   ├── ThreadSafe.hpp                      # Thread-safe wrappers (shared_mutex / recursive_mutex)
+│   ├── MockPluginLoader.hpp                # Test doubles for PluginLoader / HotPluginLoader
 │   └── platform/
 │       ├── visibility.hpp                  # Symbol visibility macros
 │       ├── extern_c.hpp                    # extern "C" wrapper macro
-│       └── shared_lib.hpp                  # Platform extension helpers
+│       ├── shared_lib.hpp                  # Platform extension helpers
+│       └── clr_helpers.hpp                 # .NET/CLR interop helpers
 │
-├── examples/
-│   ├── calculator/                         # Two plugins, same interface (polymorphism)
-│   │   ├── interfaces/ICalculator.hpp
-│   │   ├── plugins/basic_calc/             # Arithmetic only
-│   │   ├── plugins/scientific_calc/        # Adds pow, sqrt
-│   │   └── host/main.cpp
-│   │
-│   ├── libA_example/                       # You have the source code → plug it in
-│   │   ├── interfaces/ITextFormatter.hpp
-│   │   ├── libA/                           # Existing library, made into a plugin
-│   │   └── host/main.cpp
-│   │
-│   ├── libB_example/                       # You only have .dylib + header → adapter
-│   │   ├── interfaces/IStatsEngine.hpp
-│   │   ├── prebuilt/include/libB.hpp       # Vendor header (all you have)
-│   │   ├── adapter/                        # Thin wrapper that pluginifies libB
-│   │   └── host/main.cpp
-│   │
-│   ├── registry_demo/                      # Discover plugins by metadata (registry)
-│   │   └── host/main.cpp
-│   │
-│   ├── service_locator_demo/               # Plugin-to-plugin communication
-│   │   ├── interfaces/IReportGenerator.hpp
-│   │   ├── report_generator/               # Uses locator to find other plugins
-│   │   └── host/main.cpp
-│   │
-│   ├── versioned_calculator/               # Interface versioning (v1 + v2 coexist)
-│   │   ├── interfaces/ICalculatorV2.hpp    # Extends ICalculator with trig/log
-│   │   ├── plugins/trig_calc/              # Implements ICalculatorV2
-│   │   └── host/main.cpp                   # Loads v1 and v2 plugins together
-│   │
-│   ├── hot_reload_demo/                    # Swap plugins at runtime (hot-reload)
-│   │   ├── interfaces/IGreeter.hpp
-│   │   ├── plugins/greeter/                # Edit this, rebuild, see live reload
-│   │   └── host/main.cpp
-│   │
-│   ├── dynamic_plugin_demo/                # No headers — pure C ABI discovery
-│   │   ├── plugins/math_functions/         # Exports C functions + descriptor
-│   │   └── host/main.cpp                  # Discovers and calls functions by name
-│   │
-│   ├── lifecycle_demo/                     # Opt-in init/shutdown hooks
-│   │   ├── interfaces/IWorker.hpp          # Worker interface (process items)
-│   │   ├── plugins/counting_worker/        # Implements ILifecycleAware
-│   │   └── host/main.cpp                  # Detects mixin, calls hooks
-│   │
-│   └── crash_diagnostic/                   # Debug why a library crashes on load
-│       ├── bad_plugins/                    # Intentionally broken plugins
-│       └── host/main.cpp                   # Diagnostic loader (crash_diag)
+├── examples/                               # 22 examples (see below)
+├── tests/                                  # Catch2 test suite (161 tests, 404 assertions)
+└── CMakeLists.txt
 ```
 
 ## How it works
@@ -81,9 +64,41 @@ cpp_plugin_arch/
 
 The host never sees plugin source code. It only needs the interface header and the compiled binary.
 
+### Opt-in mixins
+
+Plugins gain extra capabilities by inheriting additional interfaces. The host (or `PluginManager`) detects them via `dynamic_cast` — plugins that don't need a feature simply don't inherit it:
+
+| Mixin | Purpose |
+|-------|---------|
+| `ILifecycleAware` | `on_init()` / `on_shutdown()` hooks |
+| `IConfigurable` | Accept key-value config via `configure()` |
+| `IConfigSchema` | Declare config schema with defaults and required keys |
+| `IDependencyAware` | Declare dependency types for topological sort |
+| `IServiceAware` | Receive `ServiceLocator` injection for plugin-to-plugin calls |
+| `IEventAware` | Receive `EventBus` injection for pub-sub messaging |
+| `IHealthAware` | Report health status via `is_healthy()` / `health_status()` |
+| `IConflictAware` | Declare conflicting plugin types (prevents co-loading) |
+| `IPluginMetadata` | Expose author, description, license, capabilities |
+| `ISerializable` | Save/restore plugin state |
+| `PluginObserver` | Receive callbacks on lifecycle events (load/unload/enable/disable) |
+
+### PluginManager orchestration
+
+`PluginManager` handles the full plugin lifecycle automatically:
+
+1. **Conflict check** — `IConflictAware` plugins declare types they can't coexist with
+2. **Topological sort** — `IDependencyAware` plugins are loaded after their dependencies
+3. **Version check** — dependencies can specify semver constraints (e.g., `"database>=2.0.0"`)
+4. **Configuration** — `IConfigurable` plugins receive config; `IConfigSchema` validates and fills defaults
+5. **Service wiring** — `IServiceAware` plugins receive the `ServiceLocator`; `IEventAware` receive the `EventBus`
+6. **Lifecycle** — `ILifecycleAware` plugins get `on_init()` after setup and `on_shutdown()` before teardown
+7. **Observer notifications** — registered `PluginObserver` instances receive all lifecycle events
+
 ## Examples
 
-### Calculator — two plugins, same interface
+### Core loading patterns
+
+#### Calculator — two plugins, same interface
 
 The simplest case. Two plugins (`BasicCalc`, `ScientificCalc`) implement `ICalculator`. The host loads both and exercises them through the same interface.
 
@@ -91,7 +106,7 @@ The simplest case. Two plugins (`BasicCalc`, `ScientificCalc`) implement `ICalcu
 ./build/bin/host
 ```
 
-### libA — you have the source code
+#### libA — you have the source code
 
 You have access to the library source. Add `: public ITextFormatter` to the class, add `REGISTER_PLUGIN()` at the bottom of the `.cpp`, build as SHARED. Done.
 
@@ -99,7 +114,7 @@ You have access to the library source. Add `: public ITextFormatter` to the clas
 ./build/bin/libA_host
 ```
 
-### libB — you only have the artifact + headers
+#### libB — you only have the artifact + headers
 
 You have a pre-built `.dylib` and its header, but no source code. Write a thin **adapter plugin** that wraps the vendor library and implements the plugin interface.
 
@@ -107,7 +122,17 @@ You have a pre-built `.dylib` and its header, but no source code. Write a thin *
 ./build/bin/libB_host
 ```
 
-### Plugin registry — discover plugins by metadata
+#### Dynamic plugin — no headers at all
+
+Uses `DynamicLibrary` and `PluginDescriptor` to load a plugin with zero interface headers. The plugin exports pure `extern "C"` functions and a `plugin_describe()` descriptor. The host discovers available functions at runtime, resolves them by name, and calls them — no vtables, no `IPlugin`.
+
+```bash
+./build/bin/dynamic_plugin_demo
+```
+
+### Discovery & lifecycle
+
+#### Plugin registry — discover plugins by metadata
 
 Uses `PluginRegistry` to scan a directory and index all plugins by their `IPlugin` metadata (name, version, type). No filename conventions needed — the registry probes each shared library and queries its metadata directly.
 
@@ -115,31 +140,25 @@ Uses `PluginRegistry` to scan a directory and index all plugins by their `IPlugi
 ./build/bin/registry_demo
 ```
 
-The demo discovers all plugins in the build directory, lists them grouped by type, queries by type (`"calculator"`) and by name (`"BasicCalc"`), and reports any libraries that failed to load.
+#### Lifecycle demo — opt-in init/shutdown hooks
 
-### Service locator — plugin-to-plugin communication
-
-Uses `ServiceLocator` to let plugins discover and call each other at runtime. A report generator plugin queries the locator for a stats engine and a text formatter — no direct dependencies between plugins.
+Uses `ILifecycleAware` to give plugins post-construction setup and pre-destruction teardown hooks. The host detects the mixin via `dynamic_cast`. Plugins that don't need lifecycle hooks simply don't inherit it.
 
 ```bash
-./build/bin/service_locator_demo
+./build/bin/lifecycle_demo
 ```
 
-The host loads three plugins, registers the stats engine and text formatter as services, injects the locator into the report generator via the `IServiceAware` mixin, and the report generator produces output using the other two plugins.
+#### Versioned calculator — interface versioning
 
-### Versioned calculator — interface versioning
-
-Demonstrates how to evolve an interface without breaking existing plugins. `ICalculatorV2` extends `ICalculator` with trig and log methods — but the original `ICalculator` is frozen. Existing v1 plugins (`BasicCalc`, `ScientificCalc`) continue to work unchanged.
+Demonstrates how to evolve an interface without breaking existing plugins. `ICalculatorV2` extends `ICalculator` with trig and log methods — the original `ICalculator` is frozen. Existing v1 plugins continue to work unchanged. The host uses `dynamic_cast<ICalculatorV2*>` to detect which plugins support the extended interface.
 
 ```bash
 ./build/bin/versioned_calculator_host
 ```
 
-The host loads all three calculator plugins as `ICalculator` (v1), exercises the common methods, then uses `dynamic_cast<ICalculatorV2*>` to detect which plugins support the extended interface. Only `TrigCalc` responds to the v2 probe — the other two safely return nullptr.
+#### Hot-reload — swap plugins at runtime
 
-### Hot-reload — swap plugins at runtime
-
-Uses `HotPluginLoader<T>` to detect when a plugin's `.dylib` has been rebuilt and reload it without restarting the host. The old library stays loaded until all `shared_ptr`s to the old instance are released, preventing crashes from dangling vtable pointers.
+Uses `HotPluginLoader<T>` to detect when a plugin's `.dylib` has been rebuilt and reload it without restarting the host. The old library stays loaded until all `shared_ptr`s to the old instance are released.
 
 ```bash
 # Terminal 1: run the host
@@ -151,41 +170,125 @@ cmake --build build
 # Terminal 1 shows: [reloaded] + new greeting
 ```
 
-### Dynamic plugin — no headers at all
+### Orchestration (PluginManager)
 
-Uses `DynamicLibrary` and `PluginDescriptor` to load a plugin with zero interface headers. The plugin exports pure `extern "C"` functions and a `plugin_describe()` descriptor. The host discovers available functions at runtime, resolves them by name, and calls them — no vtables, no `IPlugin`, no `allocator`/`deallocator`.
+#### Managed demo — full PluginManager end-to-end
 
-```bash
-./build/bin/dynamic_plugin_demo
-```
-
-The demo loads `libmath_functions.dylib`, queries its descriptor to list all exported functions and their signatures, calls `math_add`, `math_multiply`, and `math_sqrt`, probes for an optional `math_divide` (not exported), and checks for legacy convention symbols.
-
-### Lifecycle demo — opt-in init/shutdown hooks
-
-Uses `ILifecycleAware` to give plugins post-construction setup and pre-destruction teardown hooks. The host detects the mixin via `dynamic_cast` — same pattern as `IServiceAware`. Plugins that don't need lifecycle hooks simply don't inherit the mixin.
+Three shared-library plugins (Logger, Processor, Aggregator) with dependencies. `PluginManager` discovers them from disk, topologically sorts by dependencies, validates configs against schemas, wires services, and manages the full lifecycle.
 
 ```bash
-./build/bin/lifecycle_demo
+./build/bin/managed_demo
 ```
 
-The demo loads a `CountingWorker` plugin that uppercases strings and counts how many it has processed. The host calls `on_init()` after loading (resets the counter) and `on_shutdown()` before cleanup (prints a summary of items processed).
+#### Features demo — health, conflicts, events, enable/disable
 
-### Crash diagnostic — debug loading failures
-
-A diagnostic tool that loads any `.dylib`/`.so`/`.dll` the same way a black-box app would, but with full error reporting at every stage. Tells you exactly where the load fails.
+Demonstrates `PluginManager` B-tier features using in-process plugins: health checks (`IHealthAware`), enable/disable toggling, event priority (`EventBus`), conflict detection (`IConflictAware`), and vetoable events.
 
 ```bash
-./build/bin/crash_diag /path/to/your/library.dylib
+./build/bin/features_demo
 ```
 
-Includes three intentionally broken plugins that demonstrate common failure modes:
+### Interop
+
+#### .NET bridge — C++/CLI interop
+
+Demonstrates loading a .NET assembly as a plugin via `DynamicLibrary` and a C++/CLI bridge layer. Requires MSVC with `/clr` support (Windows only).
+
+```bash
+./build/bin/dotnet_bridge   # Windows/MSVC only
+```
+
+### Diagnostics & monitoring
+
+#### Crash diagnostic — debug loading failures
+
+A diagnostic tool that loads any `.dylib`/`.so`/`.dll` with full error reporting at every stage. Includes three intentionally broken plugins:
 
 | Plugin | Failure | Diagnostic output |
 |---|---|---|
 | `libmissing_symbols.dylib` | No `extern "C"` — symbols are mangled | Step 2: symbol not found |
 | `libcrash_in_constructor.dylib` | Constructor throws | Step 3: exception message |
 | `libcrash_on_load.dylib` | Static initializer crashes inside `dlopen` | Step 1: process aborts |
+
+```bash
+./build/bin/crash_diag /path/to/your/library.dylib
+```
+
+#### Diagnostic dump — full system report
+
+Builds a comprehensive system snapshot from `loaded_plugins()`, `check_health()`, `dependency_graph()`, and `IPluginMetadata`. Shows plugin inventory, dependency graph, health status, and metadata in one call.
+
+```bash
+./build/bin/diagnostic_dump
+```
+
+#### Metrics observer — operational metrics collection
+
+Implements `PluginObserver` to track load/unload/enable/disable/reload counts per plugin. Includes a `timed_add_plugin()` wrapper that measures load time with `steady_clock`.
+
+```bash
+./build/bin/metrics_observer
+```
+
+### Host-level patterns
+
+These examples show patterns built on top of the library API — no library modifications needed.
+
+#### Config hot-reload — reconfigure without reloading
+
+Reconfigures a plugin at runtime via the `disable()` → `enable(name, new_config)` pattern. The plugin gets `on_shutdown()`, then fresh `configure()` + `on_init()` with the new config. Uses `IConfigSchema` for validation.
+
+```bash
+./build/bin/config_hot_reload
+```
+
+#### Capability negotiation — check prerequisites before loading
+
+Uses `plugins_with_capability()` to verify that required capabilities (storage, SQL, cache, etc.) are available before proceeding. Demonstrates `disable_group()` / `enable_group()` for bulk operations on plugins sharing a capability.
+
+```bash
+./build/bin/capability_negotiation
+```
+
+#### DOT graph export — visualize dependencies
+
+Converts `loaded_plugins()` dependency data into Graphviz DOT format. Pipe the output to `dot -Tpng -o deps.png` for a visual dependency graph.
+
+```bash
+./build/bin/dot_graph | dot -Tpng -o deps.png
+```
+
+#### Lazy initialization — load on first use
+
+Wraps `ServiceLocator` with a `LazyServiceLocator` that defers plugin loading until a service is first requested. Factories are registered upfront; `add_plugin()` is called on cache miss.
+
+```bash
+./build/bin/lazy_init
+```
+
+#### Wildcard event routing — prefix subscriptions + dispatcher
+
+Subscribes to multiple `EventBus` topics by prefix convention (e.g., all `order.*` topics). Includes an `EventDispatcher` that fans out all watched topics into a single audit log topic.
+
+```bash
+./build/bin/wildcard_routing
+```
+
+#### Event replay — lifecycle history ring buffer
+
+Implements `PluginObserver` with a fixed-size ring buffer that records timestamped lifecycle and bus events. Replay the full history on demand for debugging.
+
+```bash
+./build/bin/event_replay
+```
+
+#### Batch loading — manifest-driven topo sort
+
+Loads a set of plugins from a manifest (name, type, version, deps, factory). Host-side topological sort resolves dependency order, then calls `add_plugin()` sequentially. Detects circular dependencies and missing providers.
+
+```bash
+./build/bin/batch_loading
+```
 
 ## Writing a plugin
 
