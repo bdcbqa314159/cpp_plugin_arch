@@ -164,6 +164,49 @@ TEST_CASE("Observer: multiple observers", "[observer]") {
   manager.shutdown();
 }
 
+TEST_CASE("Observer: throwing observer does not break manager", "[observer]") {
+  class ThrowingObserver : public PluginObserver {
+   public:
+    void on_plugin_loaded(const std::string&, const std::string&) override {
+      throw std::runtime_error("boom");
+    }
+    void on_plugin_unloaded(const std::string&, const std::string&) override {
+      throw std::runtime_error("boom");
+    }
+    void on_plugin_disabled(const std::string&, const std::string&) override {
+      throw std::runtime_error("boom");
+    }
+    void on_plugin_enabled(const std::string&, const std::string&) override {
+      throw std::runtime_error("boom");
+    }
+  };
+
+  PluginManager manager;
+  ThrowingObserver bad;
+  RecordingObserver good;
+  manager.add_observer(&bad);
+  manager.add_observer(&good);
+
+  // Throwing observer must not prevent the second observer from firing,
+  // and must not break the manager's state.
+  CHECK_NOTHROW(manager.add_plugin(std::make_shared<ObsPlugin>(),
+                                   make_entry("ObsPlugin", "obs")));
+  CHECK(good.events.size() == 1);
+  CHECK(good.events[0].action == "loaded");
+
+  CHECK_NOTHROW(manager.disable("ObsPlugin"));
+  CHECK(good.events.size() == 2);
+  CHECK(good.events[1].action == "disabled");
+
+  CHECK_NOTHROW(manager.enable("ObsPlugin"));
+  CHECK(good.events.size() == 3);
+  CHECK(good.events[2].action == "enabled");
+
+  CHECK_NOTHROW(manager.unload("ObsPlugin"));
+  CHECK(good.events.size() == 4);
+  CHECK(good.events[3].action == "unloaded");
+}
+
 TEST_CASE("Observer: add_observer with nullptr is ignored", "[observer]") {
   PluginManager manager;
   manager.add_observer(nullptr);

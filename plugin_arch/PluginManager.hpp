@@ -420,7 +420,7 @@ class PluginManager {
     plugins_.push_back(
         {std::move(instance), std::nullopt, entry, std::move(deps)});
     rebuild_name_index();
-    wire_instance_tracked(plugins_.back(), config_map);
+    wire_instance_tracked(plugins_.back(), config_map, /*skip_validation=*/true);
     notify_loaded(entry.name, entry.type);
     instances_dirty_ = true;
   }
@@ -694,6 +694,12 @@ class PluginManager {
     std::vector<std::string> errors;
     auto schema = schema_aware->config_schema();
 
+    // Build set of known keys
+    std::unordered_set<std::string> known_keys;
+    for (const auto& key_def : schema) {
+      known_keys.insert(key_def.key);
+    }
+
     // Check required keys and apply defaults
     for (const auto& key_def : schema) {
       if (config.find(key_def.key) == config.end()) {
@@ -702,6 +708,13 @@ class PluginManager {
         } else if (!key_def.default_value.empty()) {
           config[key_def.key] = key_def.default_value;
         }
+      }
+    }
+
+    // Reject unknown keys
+    for (const auto& [key, value] : config) {
+      if (!known_keys.contains(key)) {
+        errors.push_back("Unknown config key: " + key);
       }
     }
 
@@ -826,19 +839,19 @@ class PluginManager {
   // --- Observer notification ---
 
   void notify_loaded(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) obs->on_plugin_loaded(name, type);
+    for (auto* obs : observers_) { try { obs->on_plugin_loaded(name, type); } catch (...) {} }
   }
   void notify_unloaded(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) obs->on_plugin_unloaded(name, type);
+    for (auto* obs : observers_) { try { obs->on_plugin_unloaded(name, type); } catch (...) {} }
   }
   void notify_reloaded(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) obs->on_plugin_reloaded(name, type);
+    for (auto* obs : observers_) { try { obs->on_plugin_reloaded(name, type); } catch (...) {} }
   }
   void notify_enabled(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) obs->on_plugin_enabled(name, type);
+    for (auto* obs : observers_) { try { obs->on_plugin_enabled(name, type); } catch (...) {} }
   }
   void notify_disabled(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) obs->on_plugin_disabled(name, type);
+    for (auto* obs : observers_) { try { obs->on_plugin_disabled(name, type); } catch (...) {} }
   }
 
   // --- Name index ---
@@ -1112,35 +1125,45 @@ class PluginManager {
 
   // Wire all opt-in mixins on an instance.
   // Order matters: validate config → configure → inject services → inject events → init.
+  // skip_validation: set true when caller has already validated (e.g. add_plugin).
   void wire_instance(std::shared_ptr<IPlugin>& instance,
-                     const PluginEntry& entry, const ConfigMap& config_map) {
-    // Validate config against schema (C2) before configuring.
+                     const PluginEntry& entry, const ConfigMap& config_map,
+                     bool skip_validation = false) {
     auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
     if (configurable) {
       auto cfg_it = config_map.find(entry.name);
       if (cfg_it != config_map.end()) {
         PluginConfig config_copy = cfg_it->second;
-        auto errors = validate_config(instance.get(), config_copy);
-        if (!errors.empty()) {
-          std::string msg = "Config validation failed for '" + entry.name + "': ";
-          for (std::size_t i = 0; i < errors.size(); ++i) {
-            if (i > 0) msg += "; ";
-            msg += errors[i];
+        if (!skip_validation) {
+          auto errors = validate_config(instance.get(), config_copy);
+          if (!errors.empty()) {
+            std::string msg = "Config validation failed for '" + entry.name + "': ";
+            for (std::size_t i = 0; i < errors.size(); ++i) {
+              if (i > 0) msg += "; ";
+              msg += errors[i];
+            }
+            throw std::runtime_error(msg);
           }
-          throw std::runtime_error(msg);
+        } else {
+          // Still need to apply defaults even when skipping validation.
+          (void)validate_config(instance.get(), config_copy);
         }
         configurable->configure(config_copy);
       } else {
         // No config provided — check for required keys with no defaults.
         PluginConfig empty_config;
-        auto errors = validate_config(instance.get(), empty_config);
-        if (!errors.empty()) {
-          std::string msg = "Config validation failed for '" + entry.name + "': ";
-          for (std::size_t i = 0; i < errors.size(); ++i) {
-            if (i > 0) msg += "; ";
-            msg += errors[i];
+        if (!skip_validation) {
+          auto errors = validate_config(instance.get(), empty_config);
+          if (!errors.empty()) {
+            std::string msg = "Config validation failed for '" + entry.name + "': ";
+            for (std::size_t i = 0; i < errors.size(); ++i) {
+              if (i > 0) msg += "; ";
+              msg += errors[i];
+            }
+            throw std::runtime_error(msg);
           }
-          throw std::runtime_error(msg);
+        } else {
+          (void)validate_config(instance.get(), empty_config);
         }
         if (!empty_config.empty()) {
           // Defaults were applied — configure with them.
@@ -1167,9 +1190,10 @@ class PluginManager {
   }
 
   // Wire + track EventBus subscription IDs (for enable/disable).
-  void wire_instance_tracked(LoadedPlugin& lp, const ConfigMap& config_map) {
+  void wire_instance_tracked(LoadedPlugin& lp, const ConfigMap& config_map,
+                              bool skip_validation = false) {
     auto before = event_bus_.next_subscription_id();
-    wire_instance(lp.instance, lp.entry, config_map);
+    wire_instance(lp.instance, lp.entry, config_map, skip_validation);
     auto after = event_bus_.next_subscription_id();
 
     // Record all subscription IDs created during wiring

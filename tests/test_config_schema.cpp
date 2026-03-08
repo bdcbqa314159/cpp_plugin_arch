@@ -177,6 +177,29 @@ TEST_CASE("Config schema: backward compat — no schema, no config",
   manager.shutdown();
 }
 
+TEST_CASE("Config schema: unknown key rejected", "[config][schema]") {
+  SchemaPlugin plugin;
+  PluginConfig config = {{"host", "localhost"}, {"bogus", "value"}};
+
+  auto errors = PluginManager::validate_config(&plugin, config);
+  REQUIRE(errors.size() == 1);
+  CHECK(errors[0] == "Unknown config key: bogus");
+}
+
+TEST_CASE("Config schema: add_plugin throws on unknown key",
+          "[config][schema]") {
+  PluginManager manager;
+  PluginManager::ConfigMap config = {
+      {"SchemaPlugin", {{"host", "localhost"}, {"unknown_key", "x"}}}};
+
+  CHECK_THROWS_AS(
+      manager.add_plugin(std::make_shared<SchemaPlugin>(),
+                         make_entry("SchemaPlugin", "schema"), config),
+      std::runtime_error);
+
+  CHECK_FALSE(manager.is_loaded("SchemaPlugin"));
+}
+
 TEST_CASE("Config schema: empty config with all optional keys",
           "[config][schema]") {
   // A plugin where all keys are optional with defaults
