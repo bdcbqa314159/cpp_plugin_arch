@@ -100,15 +100,29 @@ class ApiPlugin : public IPlugin,
 
 // --- DOT export function (host-side code) ---
 
+// Escape a string for use inside DOT double-quoted identifiers.
+static std::string dot_escape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (char c : s) {
+    if (c == '"' || c == '\\') out += '\\';
+    out += c;
+  }
+  return out;
+}
+
 static void export_dot(const PluginManager& manager, std::ostream& out) {
   out << "digraph plugins {\n";
   out << "  rankdir=BT;\n";
   out << "  node [shape=box, style=filled, fillcolor=lightblue];\n\n";
 
   for (const auto& lp : manager.loaded_plugins()) {
+    auto ename = dot_escape(lp.entry.name);
+    auto eversion = dot_escape(lp.entry.version);
+
     // Node label with name and version
-    out << "  \"" << lp.entry.name << "\" [label=\"" << lp.entry.name
-        << "\\nv" << lp.entry.version << "\""
+    out << "  \"" << ename << "\" [label=\"" << ename
+        << "\\nv" << eversion << "\""
         << (lp.enabled ? "" : ", fillcolor=gray") << "];\n";
 
     // Edges: plugin → each dependency
@@ -116,8 +130,8 @@ static void export_dot(const PluginManager& manager, std::ostream& out) {
       // Find the plugin name that provides this type
       for (const auto& provider : manager.loaded_plugins()) {
         if (provider.entry.type == dep_type) {
-          out << "  \"" << lp.entry.name << "\" -> \"" << provider.entry.name
-              << "\";\n";
+          out << "  \"" << ename << "\" -> \""
+              << dot_escape(provider.entry.name) << "\";\n";
           break;
         }
       }
