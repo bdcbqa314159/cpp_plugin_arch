@@ -688,6 +688,7 @@ class PluginManager {
   // Also applies defaults for missing optional keys.
   [[nodiscard]] static std::vector<std::string> validate_config(
       IPlugin* instance, PluginConfig& config) {
+    if (!instance) return {};
     auto* schema_aware = dynamic_cast<IConfigSchema*>(instance);
     if (!schema_aware) return {};  // no schema = always valid
 
@@ -730,6 +731,7 @@ class PluginManager {
 
   // Remove an observer.
   void remove_observer(PluginObserver* observer) {
+    if (!observer) return;
     std::erase(observers_, observer);
   }
 
