@@ -1,5 +1,6 @@
 # Build
 build/
+dist/
 install/
 compile_commands.json
 CMakeUserPresets.json

@@ -1,0 +1,6 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/plugin_arch-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/PluginArch.cmake")
+
+check_required_components(plugin_arch)

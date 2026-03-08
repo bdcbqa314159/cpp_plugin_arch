@@ -1,2 +1,3 @@
-add_executable(capability_negotiation main.cpp)
-target_link_libraries(capability_negotiation PRIVATE plugin_arch)
+add_plugin_host(capability_negotiation
+    SOURCES main.cpp
+)

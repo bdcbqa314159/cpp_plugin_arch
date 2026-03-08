@@ -1,3 +1,3 @@
-add_executable(dynamic_plugin_demo main.cpp)
-
-target_link_libraries(dynamic_plugin_demo PRIVATE plugin_arch)
+add_plugin_host(dynamic_plugin_demo
+    SOURCES main.cpp
+)
