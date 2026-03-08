@@ -28,6 +28,8 @@
 #include "IDependencyAware.hpp"
 #include "IPluginMetadata.hpp"
 #include "ISerializable.hpp"
+#include "IHealthAware.hpp"
+#include "IConflictAware.hpp"
 
 // --- Orchestration ---
 #include "PluginManager.hpp"

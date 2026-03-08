@@ -16,6 +16,11 @@ add_executable(plugin_arch_tests
     test_service_locator.cpp
     test_semver.cpp
     test_plugin_manager_lifecycle.cpp
+    test_event_priority.cpp
+    test_event_veto.cpp
+    test_health_checks.cpp
+    test_enable_disable.cpp
+    test_conflicts.cpp
 )
 
 target_link_libraries(plugin_arch_tests PRIVATE

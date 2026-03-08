@@ -31,8 +31,10 @@
 #include "DynamicPluginAdapter.hpp"
 #include "EventBus.hpp"
 #include "IConfigurable.hpp"
+#include "IConflictAware.hpp"
 #include "IDependencyAware.hpp"
 #include "IEventAware.hpp"
+#include "IHealthAware.hpp"
 #include "ILifecycleAware.hpp"
 #include "IPlugin.hpp"
 #include "ISerializable.hpp"
@@ -53,8 +55,9 @@ enum class LoadPolicy {
 // Public so tests and hosts can construct instances for PluginManager::add_plugin().
 struct PluginInfo {
   PluginEntry entry;
-  std::vector<std::string> deps;      // type strings (version stripped, for topo sort)
-  std::vector<std::string> raw_deps;  // original strings (for version checking)
+  std::vector<std::string> deps;       // type strings (version stripped, for topo sort)
+  std::vector<std::string> raw_deps;   // original strings (for version checking)
+  std::vector<std::string> conflicts;  // conflicting type strings (B4)
 };
 
 // Kahn's algorithm — returns indices grouped by topological level.
@@ -132,12 +135,21 @@ class PluginManager {
   using ConfigMap = std::unordered_map<std::string, PluginConfig>;
 
   // State for a loaded plugin — tracks everything needed for unload/reload.
+  // Per-plugin health report.
+  struct PluginHealthReport {
+    std::string plugin_name;
+    HealthStatus status;
+  };
+
+  // State for a loaded plugin — tracks everything needed for unload/reload.
   struct LoadedPlugin {
     std::shared_ptr<IPlugin> instance;
     std::optional<PluginLoader<IPlugin>> loader;  // nullopt for add_plugin()
                                                   // and C ABI adapters
     PluginEntry entry;
     std::vector<std::string> deps;  // dependency type strings
+    bool enabled = true;            // B2: can be disabled without unloading
+    std::vector<EventBus::SubscriptionId> subscription_ids;  // B2: tracked for disable
   };
 
   // Scan a directory and load all discovered plugins in dependency order.
@@ -254,13 +266,12 @@ class PluginManager {
           }
           std::rethrow_exception(result.error);
         }
-        wire_instance(result.instance, infos[result.info_idx].entry,
-                      config_map);
         locator_.add(result.instance);
         plugins_.push_back({std::move(result.instance), std::move(result.loader),
                             infos[result.info_idx].entry,
                             infos[result.info_idx].deps});
         rebuild_name_index();
+        wire_instance_tracked(plugins_.back(), config_map);
         instances_dirty_ = true;
       }
     }
@@ -271,7 +282,6 @@ class PluginManager {
   void add_plugin(std::shared_ptr<IPlugin> instance,
                   const PluginEntry& entry,
                   const ConfigMap& config_map = {}) {
-    wire_instance(instance, entry, config_map);
     locator_.add(instance);
 
     std::vector<std::string> deps;
@@ -285,6 +295,7 @@ class PluginManager {
     plugins_.push_back(
         {std::move(instance), std::nullopt, entry, std::move(deps)});
     rebuild_name_index();
+    wire_instance_tracked(plugins_.back(), config_map);
     instances_dirty_ = true;
   }
 
@@ -393,16 +404,95 @@ class PluginManager {
     // Rebuild locator so dependents see the new instance
     rebuild_locator();
 
-    // Re-wire the target
-    wire_instance(target.instance, target.entry, config_map);
+    // Re-wire the target with subscription tracking
+    wire_instance_tracked(target, config_map);
 
-    // Re-wire dependents in forward (load) order
+    // Re-wire dependents in forward (load) order with subscription tracking
     std::sort(dep_indices.begin(), dep_indices.end());
     for (std::size_t idx : dep_indices) {
-      wire_instance(plugins_[idx].instance, plugins_[idx].entry, config_map);
+      wire_instance_tracked(plugins_[idx], config_map);
     }
 
     instances_dirty_ = true;
+  }
+
+  // --- Health checks (B1) ---
+
+  // Check health of all loaded, enabled plugins that implement IHealthAware.
+  // Returns reports for unhealthy plugins, or all if include_healthy is true.
+  // Disabled plugins are skipped.
+  [[nodiscard]] std::vector<PluginHealthReport> check_health(
+      bool include_healthy = false) const {
+    std::vector<PluginHealthReport> reports;
+    for (const auto& lp : plugins_) {
+      if (!lp.enabled) continue;
+      auto* health = dynamic_cast<IHealthAware*>(lp.instance.get());
+      if (!health) continue;
+      auto status = health->health_status();
+      if (include_healthy || !status.healthy) {
+        reports.push_back({lp.entry.name, std::move(status)});
+      }
+    }
+    return reports;
+  }
+
+  // --- Enable/disable (B2) ---
+
+  // Disable a plugin: calls on_shutdown(), unsubscribes from EventBus,
+  // but keeps it registered. ServiceLocator queries via get_service<T>()
+  // will skip it. Throws if not loaded.
+  void disable(const std::string& name) {
+    auto it = name_index_.find(name);
+    if (it == name_index_.end()) {
+      throw std::runtime_error("Plugin not loaded: " + name);
+    }
+    auto& lp = plugins_[it->second];
+    if (!lp.enabled) return;  // already disabled
+
+    shutdown_plugin(lp);
+
+    // Unsubscribe from EventBus
+    for (auto id : lp.subscription_ids) {
+      event_bus_.unsubscribe(id);
+    }
+    lp.subscription_ids.clear();
+
+    lp.enabled = false;
+  }
+
+  // Enable a previously disabled plugin: re-wires (configure, service locator,
+  // event bus, on_init). Throws if not loaded.
+  void enable(const std::string& name, const ConfigMap& config_map = {}) {
+    auto it = name_index_.find(name);
+    if (it == name_index_.end()) {
+      throw std::runtime_error("Plugin not loaded: " + name);
+    }
+    auto& lp = plugins_[it->second];
+    if (lp.enabled) return;  // already enabled
+
+    lp.enabled = true;
+    wire_instance_tracked(lp, config_map);
+  }
+
+  // Check if a plugin is enabled.
+  [[nodiscard]] bool is_enabled(const std::string& name) const {
+    auto it = name_index_.find(name);
+    if (it == name_index_.end()) return false;
+    return plugins_[it->second].enabled;
+  }
+
+  // Get the first enabled service matching the given type.
+  // Unlike locator().get<T>(), this skips disabled plugins.
+  template <typename T>
+  [[nodiscard]] std::shared_ptr<T> get_service(
+      const std::string& type) const {
+    for (const auto& lp : plugins_) {
+      if (!lp.enabled) continue;
+      if (lp.entry.type == type) {
+        return std::dynamic_pointer_cast<T>(lp.instance);
+      }
+    }
+    return nullptr;
   }
 
   // Shut down all plugins in reverse load order.
@@ -579,10 +669,11 @@ class PluginManager {
       PluginInfo info;
       info.entry = e;
 
-      // Probe for dependencies (only typed plugins can declare deps)
+      // Probe for dependencies and conflicts (only typed plugins)
       if (!e.is_dynamic) {
         PluginLoader<IPlugin> probe_loader(e.path.string());
         auto probe_instance = probe_loader.get_instance();
+
         auto* dep_aware =
             dynamic_cast<IDependencyAware*>(probe_instance.get());
         if (dep_aware) {
@@ -591,6 +682,12 @@ class PluginManager {
             auto parsed = Dependency::parse(raw_dep);
             info.deps.push_back(parsed.type);
           }
+        }
+
+        auto* conflict_aware =
+            dynamic_cast<IConflictAware*>(probe_instance.get());
+        if (conflict_aware) {
+          info.conflicts = conflict_aware->conflicts();
         }
       }
 
@@ -649,6 +746,25 @@ class PluginManager {
       }
     }
 
+    // --- Conflict checking (B4) ---
+    for (const auto& info : infos) {
+      for (const auto& conflict_type : info.conflicts) {
+        auto conflict_it = type_to_index.find(conflict_type);
+        if (conflict_it == type_to_index.end()) continue;
+
+        std::string msg = "Plugin '" + info.entry.name +
+                          "' conflicts with '" +
+                          infos[conflict_it->second].entry.name +
+                          "' (type: " + conflict_type + ")";
+        if (policy == LoadPolicy::strict) {
+          throw std::runtime_error(msg);
+        }
+        if (errors_out) {
+          errors_out->push_back({info.entry.path, msg});
+        }
+      }
+    }
+
     auto levels = topological_sort_levels(infos, type_to_index);
     return {std::move(infos), std::move(levels)};
   }
@@ -703,11 +819,11 @@ class PluginManager {
       loader = std::move(pl);
     }
 
-    wire_instance(instance, entry, config_map);
     locator_.add(instance);
     plugins_.push_back(
         {std::move(instance), std::move(loader), entry, deps});
     rebuild_name_index();
+    wire_instance_tracked(plugins_.back(), config_map);
     instances_dirty_ = true;
   }
 
@@ -736,6 +852,19 @@ class PluginManager {
     auto* lifecycle = dynamic_cast<ILifecycleAware*>(instance.get());
     if (lifecycle) {
       lifecycle->on_init();
+    }
+  }
+
+  // Wire + track EventBus subscription IDs (for enable/disable).
+  void wire_instance_tracked(LoadedPlugin& lp, const ConfigMap& config_map) {
+    auto before = event_bus_.next_subscription_id();
+    wire_instance(lp.instance, lp.entry, config_map);
+    auto after = event_bus_.next_subscription_id();
+
+    // Record all subscription IDs created during wiring
+    lp.subscription_ids.clear();
+    for (auto id = before; id < after; ++id) {
+      lp.subscription_ids.push_back(id);
     }
   }
 };
