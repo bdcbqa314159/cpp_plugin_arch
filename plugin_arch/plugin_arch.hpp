@@ -30,8 +30,10 @@
 #include "ISerializable.hpp"
 #include "IHealthAware.hpp"
 #include "IConflictAware.hpp"
+#include "IConfigSchema.hpp"
 
 // --- Orchestration ---
+#include "PluginObserver.hpp"
 #include "PluginManager.hpp"
 
 // --- Errors ---

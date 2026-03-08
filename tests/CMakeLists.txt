@@ -21,6 +21,10 @@ add_executable(plugin_arch_tests
     test_health_checks.cpp
     test_enable_disable.cpp
     test_conflicts.cpp
+    test_plugin_groups.cpp
+    test_config_schema.cpp
+    test_dependency_graph.cpp
+    test_observer.cpp
 )
 
 target_link_libraries(plugin_arch_tests PRIVATE

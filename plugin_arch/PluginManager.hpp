@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
@@ -30,6 +31,7 @@
 
 #include "DynamicPluginAdapter.hpp"
 #include "EventBus.hpp"
+#include "IConfigSchema.hpp"
 #include "IConfigurable.hpp"
 #include "IConflictAware.hpp"
 #include "IDependencyAware.hpp"
@@ -37,9 +39,11 @@
 #include "IHealthAware.hpp"
 #include "ILifecycleAware.hpp"
 #include "IPlugin.hpp"
+#include "IPluginMetadata.hpp"
 #include "ISerializable.hpp"
 #include "IServiceAware.hpp"
 #include "PluginLoader.hpp"
+#include "PluginObserver.hpp"
 #include "PluginRegistry.hpp"
 #include "SemVer.hpp"
 #include "ServiceLocator.hpp"
@@ -115,15 +119,71 @@ inline std::vector<std::vector<std::size_t>> topological_sort_levels(
   }
 
   if (processed != n) {
-    std::string cycle_plugins;
+    // Find an actual cycle path via DFS for a clear error message.
+    std::string cycle_chain;
+
+    // Build adjacency from deps for DFS (forward edges: plugin → its dependency)
+    std::vector<std::vector<std::size_t>> fwd(n);
     for (std::size_t i = 0; i < n; ++i) {
-      if (in_degree[i] > 0) {
-        if (!cycle_plugins.empty()) cycle_plugins += ", ";
-        cycle_plugins += infos[i].entry.name;
+      if (in_degree[i] == 0) continue;  // not in cycle
+      for (const auto& dep_type : infos[i].deps) {
+        auto dit = type_to_index.find(dep_type);
+        if (dit != type_to_index.end() && in_degree[dit->second] > 0) {
+          fwd[i].push_back(dit->second);
+        }
       }
     }
-    throw std::runtime_error("Circular dependency detected among: " +
-                             cycle_plugins);
+
+    // DFS from first unprocessed node to find a cycle
+    enum class Color { white, gray, black };
+    std::vector<Color> color(n, Color::white);
+    std::vector<std::size_t> parent(n, n);
+
+    std::function<bool(std::size_t)> dfs = [&](std::size_t u) -> bool {
+      color[u] = Color::gray;
+      for (std::size_t v : fwd[u]) {
+        if (color[v] == Color::gray) {
+          // Found cycle: trace back from u to v
+          cycle_chain = infos[v].entry.name;
+          std::size_t cur = u;
+          std::vector<std::string> path;
+          while (cur != v) {
+            path.push_back(infos[cur].entry.name);
+            cur = parent[cur];
+          }
+          for (auto rit = path.rbegin(); rit != path.rend(); ++rit) {
+            cycle_chain += " -> " + *rit;
+          }
+          cycle_chain += " -> " + infos[v].entry.name;
+          return true;
+        }
+        if (color[v] == Color::white) {
+          parent[v] = u;
+          if (dfs(v)) return true;
+        }
+      }
+      color[u] = Color::black;
+      return false;
+    };
+
+    for (std::size_t i = 0; i < n; ++i) {
+      if (in_degree[i] > 0 && color[i] == Color::white) {
+        if (dfs(i)) break;
+      }
+    }
+
+    if (cycle_chain.empty()) {
+      // Fallback: list all involved plugins
+      for (std::size_t i = 0; i < n; ++i) {
+        if (in_degree[i] > 0) {
+          if (!cycle_chain.empty()) cycle_chain += ", ";
+          cycle_chain += infos[i].entry.name;
+        }
+      }
+    }
+
+    throw std::runtime_error("Circular dependency detected: " +
+                             cycle_chain);
   }
 
   return levels;
@@ -335,11 +395,33 @@ class PluginManager {
       }
     }
 
+    // Pre-validate config before committing (C2).
+    auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
+    if (configurable) {
+      auto* schema_aware = dynamic_cast<IConfigSchema*>(instance.get());
+      if (schema_aware) {
+        auto cfg_it = config_map.find(entry.name);
+        PluginConfig check_config = (cfg_it != config_map.end())
+                                        ? cfg_it->second
+                                        : PluginConfig{};
+        auto errors = validate_config(instance.get(), check_config);
+        if (!errors.empty()) {
+          std::string msg = "Config validation failed for '" + entry.name + "': ";
+          for (std::size_t i = 0; i < errors.size(); ++i) {
+            if (i > 0) msg += "; ";
+            msg += errors[i];
+          }
+          throw std::runtime_error(msg);
+        }
+      }
+    }
+
     locator_.add(instance);
     plugins_.push_back(
         {std::move(instance), std::nullopt, entry, std::move(deps)});
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map);
+    notify_loaded(entry.name, entry.type);
     instances_dirty_ = true;
   }
 
@@ -364,10 +446,12 @@ class PluginManager {
     // Shutdown reverse dependents
     for (std::size_t idx : dep_indices) {
       shutdown_plugin(plugins_[idx]);
+      notify_unloaded(plugins_[idx].entry.name, plugins_[idx].entry.type);
     }
 
     // Shutdown the target
     shutdown_plugin(plugins_[it->second]);
+    notify_unloaded(name, target_type);
 
     // Collect all indices to remove
     std::unordered_set<std::size_t> to_remove(dep_indices.begin(),
@@ -457,6 +541,7 @@ class PluginManager {
       wire_instance_tracked(plugins_[idx], config_map);
     }
 
+    notify_reloaded(name, target_type);
     instances_dirty_ = true;
   }
 
@@ -522,6 +607,7 @@ class PluginManager {
     lp.enabled = true;
     rebuild_locator();
     wire_instance_tracked(lp, config_map);
+    notify_enabled(lp.entry.name, lp.entry.type);
   }
 
   // Check if a plugin is enabled.
@@ -543,6 +629,117 @@ class PluginManager {
       }
     }
     return nullptr;
+  }
+
+  // --- Plugin groups (C1) ---
+
+  // Get names of all loaded plugins that have the given capability.
+  // Uses IPluginMetadata::capabilities() for grouping.
+  [[nodiscard]] std::vector<std::string> plugins_with_capability(
+      const std::string& capability) const {
+    std::vector<std::string> result;
+    for (const auto& lp : plugins_) {
+      auto* meta = dynamic_cast<IPluginMetadata*>(lp.instance.get());
+      if (!meta) continue;
+      for (const auto& cap : meta->capabilities()) {
+        if (cap == capability) {
+          result.push_back(lp.entry.name);
+          break;
+        }
+      }
+    }
+    return result;
+  }
+
+  // Disable all plugins in a capability group.
+  void disable_group(const std::string& capability) {
+    for (const auto& name : plugins_with_capability(capability)) {
+      if (is_enabled(name)) {
+        disable(name);
+      }
+    }
+  }
+
+  // Enable all plugins in a capability group.
+  void enable_group(const std::string& capability,
+                    const ConfigMap& config_map = {}) {
+    for (const auto& name : plugins_with_capability(capability)) {
+      if (!is_enabled(name)) {
+        enable(name, config_map);
+      }
+    }
+  }
+
+  // Unload all plugins in a capability group.
+  void unload_group(const std::string& capability) {
+    // Collect names first — unload modifies plugins_ vector.
+    auto names = plugins_with_capability(capability);
+    for (const auto& name : names) {
+      if (is_loaded(name)) {
+        unload(name);
+      }
+    }
+  }
+
+  // --- Config validation (C2) ---
+
+  // Validate a config map against IConfigSchema for a specific plugin instance.
+  // Returns a list of error messages (empty = valid).
+  // Also applies defaults for missing optional keys.
+  [[nodiscard]] static std::vector<std::string> validate_config(
+      IPlugin* instance, PluginConfig& config) {
+    auto* schema_aware = dynamic_cast<IConfigSchema*>(instance);
+    if (!schema_aware) return {};  // no schema = always valid
+
+    std::vector<std::string> errors;
+    auto schema = schema_aware->config_schema();
+
+    // Check required keys and apply defaults
+    for (const auto& key_def : schema) {
+      if (config.find(key_def.key) == config.end()) {
+        if (key_def.required) {
+          errors.push_back("Missing required config key: " + key_def.key);
+        } else if (!key_def.default_value.empty()) {
+          config[key_def.key] = key_def.default_value;
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  // --- Observability hooks (C4) ---
+
+  // Add an observer for plugin lifecycle events.
+  void add_observer(PluginObserver* observer) {
+    if (observer) observers_.push_back(observer);
+  }
+
+  // Remove an observer.
+  void remove_observer(PluginObserver* observer) {
+    std::erase(observers_, observer);
+  }
+
+  // --- Dependency graph (C3) ---
+
+  // Returns a human-readable dependency graph of all loaded plugins.
+  // Format: "PluginName (type) -> dep1, dep2"
+  [[nodiscard]] std::vector<std::string> dependency_graph() const {
+    std::vector<std::string> lines;
+    for (const auto& lp : plugins_) {
+      std::string line = lp.entry.name + " (" + lp.entry.type + ")";
+      if (lp.deps.empty()) {
+        line += " [no deps]";
+      } else {
+        line += " -> ";
+        for (std::size_t i = 0; i < lp.deps.size(); ++i) {
+          if (i > 0) line += ", ";
+          line += lp.deps[i];
+        }
+      }
+      lines.push_back(std::move(line));
+    }
+    return lines;
   }
 
   // Shut down all plugins in reverse load order.
@@ -624,6 +821,25 @@ class PluginManager {
   mutable std::vector<std::shared_ptr<IPlugin>> instances_cache_;
   mutable bool instances_dirty_ = true;
   std::vector<ErrorRecord> load_errors_;
+  std::vector<PluginObserver*> observers_;
+
+  // --- Observer notification ---
+
+  void notify_loaded(const std::string& name, const std::string& type) {
+    for (auto* obs : observers_) obs->on_plugin_loaded(name, type);
+  }
+  void notify_unloaded(const std::string& name, const std::string& type) {
+    for (auto* obs : observers_) obs->on_plugin_unloaded(name, type);
+  }
+  void notify_reloaded(const std::string& name, const std::string& type) {
+    for (auto* obs : observers_) obs->on_plugin_reloaded(name, type);
+  }
+  void notify_enabled(const std::string& name, const std::string& type) {
+    for (auto* obs : observers_) obs->on_plugin_enabled(name, type);
+  }
+  void notify_disabled(const std::string& name, const std::string& type) {
+    for (auto* obs : observers_) obs->on_plugin_disabled(name, type);
+  }
 
   // --- Name index ---
 
@@ -656,6 +872,7 @@ class PluginManager {
     }
     lp.subscription_ids.clear();
     lp.enabled = false;
+    notify_disabled(lp.entry.name, lp.entry.type);
   }
 
   // --- Reverse dependency graph ---
@@ -889,17 +1106,46 @@ class PluginManager {
         {std::move(instance), std::move(loader), entry, deps});
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map);
+    notify_loaded(entry.name, entry.type);
     instances_dirty_ = true;
   }
 
   // Wire all opt-in mixins on an instance.
-  // Order matters: configure → inject services → inject events → init.
+  // Order matters: validate config → configure → inject services → inject events → init.
   void wire_instance(std::shared_ptr<IPlugin>& instance,
                      const PluginEntry& entry, const ConfigMap& config_map) {
+    // Validate config against schema (C2) before configuring.
     auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
     if (configurable) {
-      if (auto it = config_map.find(entry.name); it != config_map.end()) {
-        configurable->configure(it->second);
+      auto cfg_it = config_map.find(entry.name);
+      if (cfg_it != config_map.end()) {
+        PluginConfig config_copy = cfg_it->second;
+        auto errors = validate_config(instance.get(), config_copy);
+        if (!errors.empty()) {
+          std::string msg = "Config validation failed for '" + entry.name + "': ";
+          for (std::size_t i = 0; i < errors.size(); ++i) {
+            if (i > 0) msg += "; ";
+            msg += errors[i];
+          }
+          throw std::runtime_error(msg);
+        }
+        configurable->configure(config_copy);
+      } else {
+        // No config provided — check for required keys with no defaults.
+        PluginConfig empty_config;
+        auto errors = validate_config(instance.get(), empty_config);
+        if (!errors.empty()) {
+          std::string msg = "Config validation failed for '" + entry.name + "': ";
+          for (std::size_t i = 0; i < errors.size(); ++i) {
+            if (i > 0) msg += "; ";
+            msg += errors[i];
+          }
+          throw std::runtime_error(msg);
+        }
+        if (!empty_config.empty()) {
+          // Defaults were applied — configure with them.
+          configurable->configure(empty_config);
+        }
       }
     }
 
