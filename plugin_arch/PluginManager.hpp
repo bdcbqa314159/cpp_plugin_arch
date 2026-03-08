@@ -53,7 +53,8 @@ enum class LoadPolicy {
 // Public so tests and hosts can construct instances for PluginManager::add_plugin().
 struct PluginInfo {
   PluginEntry entry;
-  std::vector<std::string> deps;  // type strings (version stripped)
+  std::vector<std::string> deps;      // type strings (version stripped, for topo sort)
+  std::vector<std::string> raw_deps;  // original strings (for version checking)
 };
 
 // Kahn's algorithm — returns indices grouped by topological level.
@@ -345,9 +346,25 @@ class PluginManager {
       throw std::runtime_error("Plugin not loaded: " + name);
     }
     std::size_t target_idx = it->second;
+    auto& target = plugins_[target_idx];
+
+    // Load-then-swap: create the new instance FIRST.
+    // If this throws, nothing has been shut down — manager stays consistent.
+    std::shared_ptr<IPlugin> new_instance;
+    std::optional<PluginLoader<IPlugin>> new_loader;
+
+    if (target.entry.is_dynamic) {
+      new_instance = DynamicPluginAdapter::load(target.entry.path.string());
+    } else {
+      PluginLoader<IPlugin> pl(target.entry.path.string());
+      new_instance = pl.get_instance();
+      new_loader = std::move(pl);
+    }
+
+    // New instance created successfully — safe to proceed with shutdown.
 
     // Find reverse dependents
-    auto target_type = plugins_[target_idx].entry.type;
+    auto target_type = target.entry.type;
     auto dep_indices = find_reverse_dependents(target_type);
     std::sort(dep_indices.begin(), dep_indices.end(), std::greater<>());
 
@@ -357,36 +374,21 @@ class PluginManager {
     }
 
     // Shutdown target
-    auto& target = plugins_[target_idx];
     shutdown_plugin(target);
 
-    // Save state if serializable
-    std::string saved_state;
-    bool has_state = false;
-    auto* serializable = dynamic_cast<ISerializable*>(target.instance.get());
-    if (serializable) {
-      saved_state = serializable->save_state();
-      has_state = true;
-    }
-
-    // Re-load the plugin
-    if (target.entry.is_dynamic) {
-      target.instance =
-          DynamicPluginAdapter::load(target.entry.path.string());
-      target.loader = std::nullopt;
-    } else {
-      PluginLoader<IPlugin> new_loader(target.entry.path.string());
-      target.instance = new_loader.get_instance();
-      target.loader = std::move(new_loader);
-    }
-
-    // Restore state
-    if (has_state) {
-      auto* new_ser = dynamic_cast<ISerializable*>(target.instance.get());
+    // Save state from old instance and restore into new
+    auto* old_ser = dynamic_cast<ISerializable*>(target.instance.get());
+    if (old_ser) {
+      auto saved_state = old_ser->save_state();
+      auto* new_ser = dynamic_cast<ISerializable*>(new_instance.get());
       if (new_ser) {
         new_ser->restore_state(saved_state);
       }
     }
+
+    // Swap in the new instance
+    target.instance = std::move(new_instance);
+    target.loader = std::move(new_loader);
 
     // Rebuild locator so dependents see the new instance
     rebuild_locator();
@@ -578,8 +580,8 @@ class PluginManager {
         auto* dep_aware =
             dynamic_cast<IDependencyAware*>(probe_instance.get());
         if (dep_aware) {
-          // Parse dependencies: extract type strings, check versions later
-          for (const auto& raw_dep : dep_aware->dependencies()) {
+          info.raw_deps = dep_aware->dependencies();
+          for (const auto& raw_dep : info.raw_deps) {
             auto parsed = Dependency::parse(raw_dep);
             info.deps.push_back(parsed.type);
           }
@@ -605,46 +607,30 @@ class PluginManager {
     }
 
     // --- Version constraint checking (A2) ---
-    // After building the type index, verify that each dependency's version
-    // constraint is satisfied by the provider's version.
+    // Uses raw_deps saved during probe — no re-loading needed.
     for (const auto& info : infos) {
-      if (info.entry.is_dynamic) continue;
+      for (const auto& raw_dep : info.raw_deps) {
+        auto parsed = Dependency::parse(raw_dep);
+        if (parsed.op == Dependency::Op::any) continue;
 
-      // Re-probe to get raw dependency strings for version checking
-      try {
-        PluginLoader<IPlugin> probe_loader(info.entry.path.string());
-        auto probe_instance = probe_loader.get_instance();
-        auto* dep_aware =
-            dynamic_cast<IDependencyAware*>(probe_instance.get());
-        if (!dep_aware) continue;
+        auto provider_it = type_to_index.find(parsed.type);
+        if (provider_it == type_to_index.end()) continue;  // topo sort will catch
 
-        for (const auto& raw_dep : dep_aware->dependencies()) {
-          auto parsed = Dependency::parse(raw_dep);
-          if (parsed.op == Dependency::Op::any) continue;
+        const auto& provider = infos[provider_it->second];
+        auto provider_version = SemVer::parse(provider.entry.version);
 
-          auto provider_it = type_to_index.find(parsed.type);
-          if (provider_it == type_to_index.end()) continue;  // topo sort will catch
-
-          const auto& provider = infos[provider_it->second];
-          auto provider_version = SemVer::parse(provider.entry.version);
-
-          if (!parsed.satisfied_by(provider_version)) {
-            std::string msg = "Plugin '" + info.entry.name +
-                              "' requires " + raw_dep + " but '" +
-                              provider.entry.name + "' provides version " +
-                              provider.entry.version;
-            if (policy == LoadPolicy::strict) {
-              throw std::runtime_error(msg);
-            }
-            if (errors_out) {
-              errors_out->push_back({info.entry.path, msg});
-            }
+        if (!parsed.satisfied_by(provider_version)) {
+          std::string msg = "Plugin '" + info.entry.name +
+                            "' requires " + raw_dep + " but '" +
+                            provider.entry.name + "' provides version " +
+                            provider.entry.version;
+          if (policy == LoadPolicy::strict) {
+            throw std::runtime_error(msg);
+          }
+          if (errors_out) {
+            errors_out->push_back({info.entry.path, msg});
           }
         }
-      } catch (const std::runtime_error&) {
-        throw;  // re-throw version errors
-      } catch (...) {
-        // probe failure — will be caught during loading
       }
     }
 
