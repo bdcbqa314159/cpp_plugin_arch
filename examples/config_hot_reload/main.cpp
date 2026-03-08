@@ -41,8 +41,9 @@ class LoggerPlugin : public IPlugin,
   }
 
   void on_init() override {
-    std::cout << "  [Logger] Initialized with level=" << config_.at("level")
-              << "\n";
+    auto it = config_.find("level");
+    std::cout << "  [Logger] Initialized with level="
+              << (it != config_.end() ? it->second : "(unconfigured)") << "\n";
   }
 
   void on_shutdown() override {
