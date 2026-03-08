@@ -142,9 +142,9 @@ static PluginEntry make_entry(const std::string& name,
 // --- Main ---
 
 int main() {
+  EventRecorder recorder(50);  // keep last 50 events — declared first so it outlives manager
   PluginManager manager;
   EventBus bus;
-  EventRecorder recorder(50);  // keep last 50 events
 
   manager.add_observer(&recorder);
 
