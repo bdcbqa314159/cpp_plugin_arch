@@ -67,10 +67,25 @@ static PluginEntry make_entry(const std::string& name,
   return e;
 }
 
+// PluginB declares conflict with typeA (reverse direction test).
+class PluginBConflictsA : public IPlugin, public IConflictAware {
+ public:
+  const std::string& name() const override {
+    static const std::string n = "PluginBConflictsA";
+    return n;
+  }
+  const std::string& version() const override {
+    static const std::string v = "1.0.0";
+    return v;
+  }
+  const std::string& type() const override {
+    static const std::string t = "typeB";
+    return t;
+  }
+  std::vector<std::string> conflicts() const override { return {"typeA"}; }
+};
+
 // --- Tests ---
-// Note: Conflict checking happens at discover_and_sort() time (filesystem scan),
-// not via add_plugin(). These tests exercise the IConflictAware interface and
-// PluginInfo::conflicts field.
 
 TEST_CASE("IConflictAware: returns conflict types", "[conflicts]") {
   PluginA a;
@@ -106,6 +121,62 @@ TEST_CASE("Non-conflicting plugins coexist via add_plugin", "[conflicts]") {
 
   CHECK(manager.is_loaded("PluginA"));
   CHECK(manager.is_loaded("NoConflict"));
+
+  manager.shutdown();
+}
+
+TEST_CASE("add_plugin: new plugin conflicts with existing (D5)",
+          "[conflicts]") {
+  PluginManager manager;
+  // PluginA declares conflict with typeB
+  manager.add_plugin(std::make_shared<PluginA>(),
+                     make_entry("PluginA", "typeA"));
+
+  // Adding PluginB (typeB) should throw because PluginA conflicts with typeB
+  CHECK_THROWS_AS(
+      manager.add_plugin(std::make_shared<PluginB>(),
+                         make_entry("PluginB", "typeB")),
+      std::runtime_error);
+
+  CHECK(manager.is_loaded("PluginA"));
+  CHECK_FALSE(manager.is_loaded("PluginB"));
+
+  manager.shutdown();
+}
+
+TEST_CASE("add_plugin: existing plugin conflicts with new (D5 reverse)",
+          "[conflicts]") {
+  PluginManager manager;
+  // Load a plain PluginB (no conflicts declared on its side)
+  manager.add_plugin(std::make_shared<PluginB>(),
+                     make_entry("PluginB", "typeB"));
+
+  // Now load PluginBConflictsA which declares conflict with typeA... no issue
+  // But if we load something that an existing plugin conflicts with:
+  // PluginA declares conflict with typeB, and typeB is already loaded
+  CHECK_THROWS_AS(
+      manager.add_plugin(std::make_shared<PluginA>(),
+                         make_entry("PluginA", "typeA")),
+      std::runtime_error);
+
+  manager.shutdown();
+}
+
+TEST_CASE("add_plugin: reverse conflict check — existing declares conflict (D5)",
+          "[conflicts]") {
+  PluginManager manager;
+  // Load PluginBConflictsA which declares conflict with typeA
+  manager.add_plugin(std::make_shared<PluginBConflictsA>(),
+                     make_entry("PluginBConflictsA", "typeB"));
+
+  // Now add a plain plugin with typeA — should be blocked by existing conflict
+  CHECK_THROWS_AS(
+      manager.add_plugin(std::make_shared<NoConflictPlugin>(),
+                         [&] {
+                           auto e = make_entry("PlainA", "typeA");
+                           return e;
+                         }()),
+      std::runtime_error);
 
   manager.shutdown();
 }

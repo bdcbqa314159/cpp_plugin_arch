@@ -7,6 +7,7 @@
 #include "ILifecycleAware.hpp"
 #include "ISerializable.hpp"
 #include "PluginManager.hpp"
+#include "SemVer.hpp"
 
 using namespace plugin_arch;
 
@@ -236,4 +237,60 @@ TEST_CASE("PluginManager: shutdown calls on_shutdown in reverse order",
   CHECK(logger->shutdown_count == 1);
   CHECK(processor->shutdown_count == 1);
   CHECK(manager.instances().empty());
+}
+
+// --- Version-constrained dependency plugin ---
+
+class VersionedProcessor : public IPlugin,
+                           public ILifecycleAware,
+                           public IDependencyAware {
+ public:
+  const std::string& name() const override {
+    static const std::string n = "VersionedProcessor";
+    return n;
+  }
+  const std::string& version() const override {
+    static const std::string v = "1.0.0";
+    return v;
+  }
+  const std::string& type() const override {
+    static const std::string t = "vprocessor";
+    return t;
+  }
+  std::vector<std::string> dependencies() const override {
+    return {"logger >= 2.0"};
+  }
+  void on_init() override {}
+  void on_shutdown() override {}
+};
+
+TEST_CASE("add_plugin: version constraint satisfied (D6)",
+          "[manager][lifecycle]") {
+  PluginManager manager;
+  auto logger = std::make_shared<MockLogger>();
+  // MockLogger version is "2.0.0" — satisfies "logger >= 2.0"
+  manager.add_plugin(logger, make_entry("MockLogger", "logger", "2.0.0"));
+
+  CHECK_NOTHROW(
+      manager.add_plugin(std::make_shared<VersionedProcessor>(),
+                         make_entry("VersionedProcessor", "vprocessor")));
+
+  manager.shutdown();
+}
+
+TEST_CASE("add_plugin: version constraint violated throws (D6)",
+          "[manager][lifecycle]") {
+  PluginManager manager;
+  auto logger = std::make_shared<MockLogger>();
+  // Register logger as version "1.0.0" — does NOT satisfy "logger >= 2.0"
+  manager.add_plugin(logger, make_entry("MockLogger", "logger", "1.0.0"));
+
+  CHECK_THROWS_AS(
+      manager.add_plugin(std::make_shared<VersionedProcessor>(),
+                         make_entry("VersionedProcessor", "vprocessor")),
+      std::runtime_error);
+
+  CHECK_FALSE(manager.is_loaded("VersionedProcessor"));
+
+  manager.shutdown();
 }

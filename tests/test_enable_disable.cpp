@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "IDependencyAware.hpp"
 #include "IEventAware.hpp"
 #include "ILifecycleAware.hpp"
 #include "PluginManager.hpp"
@@ -203,6 +204,104 @@ TEST_CASE("Enable/Disable: get_service skips disabled plugins",
 
   manager.enable("SimplePlugin");
   CHECK(manager.get_service<IPlugin>("simple") != nullptr);
+
+  manager.shutdown();
+}
+
+// --- D7: disable cascades to dependents ---
+
+class DepPlugin : public IPlugin,
+                  public ILifecycleAware,
+                  public IDependencyAware {
+ public:
+  DepPlugin(std::string name, std::string type, std::vector<std::string> deps)
+      : name_(std::move(name)), type_(std::move(type)),
+        deps_(std::move(deps)) {}
+
+  const std::string& name() const override { return name_; }
+  const std::string& version() const override {
+    static const std::string v = "1.0.0";
+    return v;
+  }
+  const std::string& type() const override { return type_; }
+  std::vector<std::string> dependencies() const override { return deps_; }
+  void on_init() override { ++init_count; }
+  void on_shutdown() override { ++shutdown_count; }
+
+  int init_count = 0;
+  int shutdown_count = 0;
+
+ private:
+  std::string name_;
+  std::string type_;
+  std::vector<std::string> deps_;
+};
+
+TEST_CASE("Enable/Disable: disable cascades to dependents (D7)",
+          "[manager][toggle]") {
+  PluginManager manager;
+  auto base = std::make_shared<SimplePlugin>();
+  auto dep = std::make_shared<DepPlugin>("DepPlugin", "dep", std::vector<std::string>{"simple"});
+
+  manager.add_plugin(base, make_entry("SimplePlugin", "simple"));
+  manager.add_plugin(dep, make_entry("DepPlugin", "dep"));
+
+  CHECK(manager.is_enabled("SimplePlugin"));
+  CHECK(manager.is_enabled("DepPlugin"));
+
+  // Disabling base should cascade to dep
+  manager.disable("SimplePlugin");
+
+  CHECK_FALSE(manager.is_enabled("SimplePlugin"));
+  CHECK_FALSE(manager.is_enabled("DepPlugin"));
+  CHECK(base->shutdown_count == 1);
+  CHECK(dep->shutdown_count == 1);
+
+  // Both still loaded
+  CHECK(manager.is_loaded("SimplePlugin"));
+  CHECK(manager.is_loaded("DepPlugin"));
+
+  manager.shutdown();
+}
+
+TEST_CASE("Enable/Disable: disable leaf does not cascade (D7)",
+          "[manager][toggle]") {
+  PluginManager manager;
+  auto base = std::make_shared<SimplePlugin>();
+  auto dep = std::make_shared<DepPlugin>("DepPlugin", "dep", std::vector<std::string>{"simple"});
+
+  manager.add_plugin(base, make_entry("SimplePlugin", "simple"));
+  manager.add_plugin(dep, make_entry("DepPlugin", "dep"));
+
+  // Disabling the leaf should not affect base
+  manager.disable("DepPlugin");
+
+  CHECK(manager.is_enabled("SimplePlugin"));
+  CHECK_FALSE(manager.is_enabled("DepPlugin"));
+
+  manager.shutdown();
+}
+
+// --- D8: locator excludes disabled plugins ---
+
+TEST_CASE("Enable/Disable: locator().get skips disabled plugins (D8)",
+          "[manager][toggle]") {
+  PluginManager manager;
+  auto plugin = std::make_shared<SimplePlugin>();
+  manager.add_plugin(plugin, make_entry("SimplePlugin", "simple"));
+
+  // Direct locator access should find it when enabled
+  CHECK(manager.locator().get<IPlugin>("simple") != nullptr);
+
+  manager.disable("SimplePlugin");
+
+  // Direct locator access should NOT find it when disabled
+  CHECK(manager.locator().get<IPlugin>("simple") == nullptr);
+
+  manager.enable("SimplePlugin");
+
+  // Back after re-enable
+  CHECK(manager.locator().get<IPlugin>("simple") != nullptr);
 
   manager.shutdown();
 }

@@ -282,16 +282,60 @@ class PluginManager {
   void add_plugin(std::shared_ptr<IPlugin> instance,
                   const PluginEntry& entry,
                   const ConfigMap& config_map = {}) {
-    locator_.add(instance);
+    // --- Conflict checks (D5) ---
+    auto* conflict_aware = dynamic_cast<IConflictAware*>(instance.get());
+    if (conflict_aware) {
+      for (const auto& conflict_type : conflict_aware->conflicts()) {
+        for (const auto& lp : plugins_) {
+          if (lp.entry.type == conflict_type) {
+            throw std::runtime_error(
+                "Plugin '" + entry.name + "' conflicts with '" +
+                lp.entry.name + "' (type: " + conflict_type + ")");
+          }
+        }
+      }
+    }
+    // Check if any already-loaded plugin conflicts with this one.
+    for (const auto& lp : plugins_) {
+      auto* existing_conflict =
+          dynamic_cast<IConflictAware*>(lp.instance.get());
+      if (!existing_conflict) continue;
+      for (const auto& conflict_type : existing_conflict->conflicts()) {
+        if (conflict_type == entry.type) {
+          throw std::runtime_error(
+              "Plugin '" + lp.entry.name + "' conflicts with '" +
+              entry.name + "' (type: " + entry.type + ")");
+        }
+      }
+    }
 
+    // --- Dependency + version checks (D6) ---
     std::vector<std::string> deps;
     auto* dep_aware = dynamic_cast<IDependencyAware*>(instance.get());
     if (dep_aware) {
       for (const auto& raw_dep : dep_aware->dependencies()) {
-        deps.push_back(Dependency::parse(raw_dep).type);
+        auto parsed = Dependency::parse(raw_dep);
+        deps.push_back(parsed.type);
+
+        if (parsed.op != Dependency::Op::any) {
+          // Find the provider and check version constraint.
+          for (const auto& lp : plugins_) {
+            if (lp.entry.type == parsed.type) {
+              auto provider_version = SemVer::parse(lp.entry.version);
+              if (!parsed.satisfied_by(provider_version)) {
+                throw std::runtime_error(
+                    "Plugin '" + entry.name + "' requires " + raw_dep +
+                    " but '" + lp.entry.name + "' provides version " +
+                    lp.entry.version);
+              }
+              break;
+            }
+          }
+        }
       }
     }
 
+    locator_.add(instance);
     plugins_.push_back(
         {std::move(instance), std::nullopt, entry, std::move(deps)});
     rebuild_name_index();
@@ -428,10 +472,12 @@ class PluginManager {
       if (!lp.enabled) continue;
       auto* health = dynamic_cast<IHealthAware*>(lp.instance.get());
       if (!health) continue;
-      auto status = health->health_status();
-      if (include_healthy || !status.healthy) {
-        reports.push_back({lp.entry.name, std::move(status)});
-      }
+
+      // Fast-path: skip healthy plugins when not requested.
+      if (!include_healthy && health->is_healthy()) continue;
+
+      // Slow-path: get full diagnostic status.
+      reports.push_back({lp.entry.name, health->health_status()});
     }
     return reports;
   }
@@ -449,15 +495,18 @@ class PluginManager {
     auto& lp = plugins_[it->second];
     if (!lp.enabled) return;  // already disabled
 
-    shutdown_plugin(lp);
-
-    // Unsubscribe from EventBus
-    for (auto id : lp.subscription_ids) {
-      event_bus_.unsubscribe(id);
+    // Cascade: disable reverse dependents first (same logic as unload).
+    auto target_type = lp.entry.type;
+    auto dep_indices = find_reverse_dependents(target_type);
+    std::sort(dep_indices.begin(), dep_indices.end(), std::greater<>());
+    for (std::size_t idx : dep_indices) {
+      if (plugins_[idx].enabled) {
+        disable_single(plugins_[idx]);
+      }
     }
-    lp.subscription_ids.clear();
 
-    lp.enabled = false;
+    disable_single(lp);
+    rebuild_locator();
   }
 
   // Enable a previously disabled plugin: re-wires (configure, service locator,
@@ -471,6 +520,7 @@ class PluginManager {
     if (lp.enabled) return;  // already enabled
 
     lp.enabled = true;
+    rebuild_locator();
     wire_instance_tracked(lp, config_map);
   }
 
@@ -586,11 +636,26 @@ class PluginManager {
 
   // --- Locator rebuild ---
 
+  // Only adds enabled plugins — disabled plugins are invisible to the locator (D8).
   void rebuild_locator() {
     locator_.clear();
     for (const auto& lp : plugins_) {
-      locator_.add(lp.instance);
+      if (lp.enabled) {
+        locator_.add(lp.instance);
+      }
     }
+  }
+
+  // --- Disable helper ---
+
+  // Disable a single plugin without cascading or rebuilding locator.
+  void disable_single(LoadedPlugin& lp) {
+    shutdown_plugin(lp);
+    for (auto id : lp.subscription_ids) {
+      event_bus_.unsubscribe(id);
+    }
+    lp.subscription_ids.clear();
+    lp.enabled = false;
   }
 
   // --- Reverse dependency graph ---
