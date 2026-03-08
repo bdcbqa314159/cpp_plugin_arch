@@ -294,3 +294,26 @@ TEST_CASE("add_plugin: version constraint violated throws (D6)",
 
   manager.shutdown();
 }
+
+TEST_CASE("add_plugin: reverse version check — provider loaded after dependent",
+          "[manager][lifecycle]") {
+  PluginManager manager;
+  // Load dependent first (no provider yet — accepted for incremental loading)
+  manager.add_plugin(std::make_shared<VersionedProcessor>(),
+                     make_entry("VersionedProcessor", "vprocessor"));
+
+  // Now load provider with version that does NOT satisfy "logger >= 2.0"
+  CHECK_THROWS_AS(
+      manager.add_plugin(std::make_shared<MockLogger>(),
+                         make_entry("MockLogger", "logger", "1.0.0")),
+      std::runtime_error);
+
+  CHECK_FALSE(manager.is_loaded("MockLogger"));
+
+  // Loading with satisfying version should work
+  CHECK_NOTHROW(
+      manager.add_plugin(std::make_shared<MockLogger>(),
+                         make_entry("MockLogger", "logger", "2.0.0")));
+
+  manager.shutdown();
+}

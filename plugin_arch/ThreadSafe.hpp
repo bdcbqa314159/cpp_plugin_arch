@@ -14,6 +14,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -150,6 +151,11 @@ class ThreadSafe<HotPluginLoader<T>> {
 };
 
 // --- ThreadSafe<EventBus> ---
+//
+// Uses std::recursive_mutex (not shared_mutex) so that handlers invoked
+// during publish() can safely call subscribe()/unsubscribe() on the same
+// instance without deadlocking. EventBus::publish() already takes a
+// snapshot of handlers before iterating, so the re-entrant mutation is safe.
 
 template <>
 class ThreadSafe<EventBus> {
@@ -162,7 +168,7 @@ class ThreadSafe<EventBus> {
   }
 
   void publish(const std::string& topic, const std::string& payload = {}) {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     inner_.publish(topic, payload);
   }
 
@@ -176,7 +182,7 @@ class ThreadSafe<EventBus> {
 
   template <typename T>
   void publish_typed(const std::string& topic, const T& event) {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     inner_.publish_typed<T>(topic, event);
   }
 
@@ -190,7 +196,7 @@ class ThreadSafe<EventBus> {
   [[nodiscard]] bool publish_vetoable(const std::string& topic,
                                        const std::string& payload = {},
                                        bool stop_on_veto = true) {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     return inner_.publish_vetoable(topic, payload, stop_on_veto);
   }
 
@@ -205,30 +211,30 @@ class ThreadSafe<EventBus> {
   }
 
   [[nodiscard]] std::size_t subscriber_count(const std::string& topic) const {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     return inner_.subscriber_count(topic);
   }
 
   [[nodiscard]] std::size_t typed_subscriber_count(
       const std::string& topic) const {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     return inner_.typed_subscriber_count(topic);
   }
 
   [[nodiscard]] std::size_t vetoable_subscriber_count(
       const std::string& topic) const {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     return inner_.vetoable_subscriber_count(topic);
   }
 
   [[nodiscard]] EventBus::SubscriptionId next_subscription_id() const {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     return inner_.next_subscription_id();
   }
 
  private:
   EventBus inner_;
-  mutable std::shared_mutex mutex_;
+  mutable std::recursive_mutex mutex_;
 };
 
 // --- ThreadSafe<PluginManager> ---
@@ -323,6 +329,57 @@ class ThreadSafe<PluginManager> {
     std::shared_lock lock(mutex_);
     return std::vector<ErrorRecord>(inner_.load_errors().begin(),
                                     inner_.load_errors().end());
+  }
+
+  // --- C1: Plugin groups ---
+
+  [[nodiscard]] std::vector<std::string> plugins_with_capability(
+      const std::string& capability) const {
+    std::shared_lock lock(mutex_);
+    return inner_.plugins_with_capability(capability);
+  }
+
+  void disable_group(const std::string& capability) {
+    std::unique_lock lock(mutex_);
+    inner_.disable_group(capability);
+  }
+
+  void enable_group(const std::string& capability,
+                    const PluginManager::ConfigMap& config_map = {}) {
+    std::unique_lock lock(mutex_);
+    inner_.enable_group(capability, config_map);
+  }
+
+  void unload_group(const std::string& capability) {
+    std::unique_lock lock(mutex_);
+    inner_.unload_group(capability);
+  }
+
+  // --- C3: Dependency graph ---
+
+  [[nodiscard]] std::vector<std::string> dependency_graph() const {
+    std::shared_lock lock(mutex_);
+    return inner_.dependency_graph();
+  }
+
+  // --- C4: Observers ---
+
+  void add_observer(PluginObserver* observer) {
+    std::unique_lock lock(mutex_);
+    inner_.add_observer(observer);
+  }
+
+  void remove_observer(PluginObserver* observer) {
+    std::unique_lock lock(mutex_);
+    inner_.remove_observer(observer);
+  }
+
+  // --- Additional accessors ---
+
+  [[nodiscard]] std::vector<PluginManager::LoadedPlugin> loaded_plugins() const {
+    std::shared_lock lock(mutex_);
+    return std::vector<PluginManager::LoadedPlugin>(
+        inner_.loaded_plugins().begin(), inner_.loaded_plugins().end());
   }
 
  private:

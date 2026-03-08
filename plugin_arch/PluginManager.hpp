@@ -395,6 +395,25 @@ class PluginManager {
       }
     }
 
+    // --- Reverse version check (L1-D6) ---
+    // Existing plugins may depend on this plugin's type with a version constraint.
+    for (const auto& lp : plugins_) {
+      auto* existing_dep = dynamic_cast<IDependencyAware*>(lp.instance.get());
+      if (!existing_dep) continue;
+      for (const auto& raw_dep : existing_dep->dependencies()) {
+        auto parsed = Dependency::parse(raw_dep);
+        if (parsed.type == entry.type && parsed.op != Dependency::Op::any) {
+          auto new_version = SemVer::parse(entry.version);
+          if (!parsed.satisfied_by(new_version)) {
+            throw std::runtime_error(
+                "Plugin '" + lp.entry.name + "' requires " + raw_dep +
+                " but '" + entry.name + "' provides version " +
+                entry.version);
+          }
+        }
+      }
+    }
+
     // Pre-validate config before committing (C2).
     auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
     if (configurable) {
