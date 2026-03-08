@@ -41,6 +41,17 @@ TEST_CASE("SemVer parse: invalid throws", "[semver]") {
   CHECK_THROWS_AS(SemVer::parse(""), std::runtime_error);
 }
 
+TEST_CASE("SemVer parse: negative component throws", "[semver]") {
+  CHECK_THROWS_AS(SemVer::parse("-1.0.0"), std::runtime_error);
+  CHECK_THROWS_AS(SemVer::parse("1.-2.0"), std::runtime_error);
+  CHECK_THROWS_AS(SemVer::parse("1.0.-3"), std::runtime_error);
+}
+
+TEST_CASE("Dependency parse: empty string throws", "[semver]") {
+  CHECK_THROWS_AS(Dependency::parse(""), std::runtime_error);
+  CHECK_THROWS_AS(Dependency::parse("   "), std::runtime_error);
+}
+
 // --- SemVer comparison ---
 
 TEST_CASE("SemVer comparison: ordering", "[semver]") {

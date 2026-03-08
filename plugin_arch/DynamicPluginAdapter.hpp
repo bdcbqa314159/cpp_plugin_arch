@@ -53,10 +53,10 @@ class DynamicPluginAdapter : public IPlugin,
       throw std::runtime_error("plugin_describe() returned nullptr: " + path);
     }
 
-    name_ = desc_->name;
-    version_ = desc_->version;
+    name_ = desc_->name ? desc_->name : "";
+    version_ = desc_->version ? desc_->version : "";
     // Use plugin name as type — host can override if needed
-    type_ = desc_->name;
+    type_ = name_;
 
     // Probe for optional lifecycle callbacks
     if (lib_->has("plugin_init")) {

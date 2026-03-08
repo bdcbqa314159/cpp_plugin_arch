@@ -34,6 +34,10 @@ struct SemVer {
         throw std::runtime_error("Invalid version component: '" +
                                  std::string(part) + "'");
       }
+      if (val < 0) {
+        throw std::runtime_error("Negative version component: '" +
+                                 std::string(part) + "'");
+      }
       return val;
     };
 
@@ -91,6 +95,10 @@ struct Dependency {
     // Trim
     while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
     while (!s.empty() && s.back() == ' ') s.remove_suffix(1);
+
+    if (s.empty()) {
+      throw std::runtime_error("Empty dependency string");
+    }
 
     // Split on first space
     auto space = s.find(' ');

@@ -177,9 +177,9 @@ class PluginRegistry {
 
     PluginEntry entry;
     entry.path = path;
-    entry.name = desc->name;
-    entry.version = desc->version;
-    entry.type = desc->name;  // C ABI plugins use name as type
+    entry.name = desc->name ? desc->name : "";
+    entry.version = desc->version ? desc->version : "";
+    entry.type = entry.name;  // C ABI plugins use name as type
     entry.is_dynamic = true;
 
     return entry;

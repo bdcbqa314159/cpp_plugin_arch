@@ -542,10 +542,16 @@ class PluginManager {
 
   // --- Plugin shutdown ---
 
+  // Calls on_shutdown() if the plugin implements ILifecycleAware.
+  // Swallows exceptions — one bad plugin must not prevent others from
+  // shutting down (same principle as EventBus::publish).
   static void shutdown_plugin(LoadedPlugin& lp) {
     auto* lifecycle = dynamic_cast<ILifecycleAware*>(lp.instance.get());
     if (lifecycle) {
-      lifecycle->on_shutdown();
+      try {
+        lifecycle->on_shutdown();
+      } catch (...) {
+      }
     }
   }
 
@@ -610,25 +616,34 @@ class PluginManager {
     // Uses raw_deps saved during probe — no re-loading needed.
     for (const auto& info : infos) {
       for (const auto& raw_dep : info.raw_deps) {
-        auto parsed = Dependency::parse(raw_dep);
-        if (parsed.op == Dependency::Op::any) continue;
+        try {
+          auto parsed = Dependency::parse(raw_dep);
+          if (parsed.op == Dependency::Op::any) continue;
 
-        auto provider_it = type_to_index.find(parsed.type);
-        if (provider_it == type_to_index.end()) continue;  // topo sort will catch
+          auto provider_it = type_to_index.find(parsed.type);
+          if (provider_it == type_to_index.end()) continue;  // topo sort will catch
 
-        const auto& provider = infos[provider_it->second];
-        auto provider_version = SemVer::parse(provider.entry.version);
+          const auto& provider = infos[provider_it->second];
+          auto provider_version = SemVer::parse(provider.entry.version);
 
-        if (!parsed.satisfied_by(provider_version)) {
-          std::string msg = "Plugin '" + info.entry.name +
-                            "' requires " + raw_dep + " but '" +
-                            provider.entry.name + "' provides version " +
-                            provider.entry.version;
-          if (policy == LoadPolicy::strict) {
-            throw std::runtime_error(msg);
+          if (!parsed.satisfied_by(provider_version)) {
+            std::string msg = "Plugin '" + info.entry.name +
+                              "' requires " + raw_dep + " but '" +
+                              provider.entry.name + "' provides version " +
+                              provider.entry.version;
+            if (policy == LoadPolicy::strict) {
+              throw std::runtime_error(msg);
+            }
+            if (errors_out) {
+              errors_out->push_back({info.entry.path, msg});
+            }
           }
+        } catch (const std::runtime_error& e) {
+          // In strict mode, version mismatches propagate.
+          // In best_effort, record and continue.
+          if (policy == LoadPolicy::strict) throw;
           if (errors_out) {
-            errors_out->push_back({info.entry.path, msg});
+            errors_out->push_back({info.entry.path, e.what()});
           }
         }
       }
