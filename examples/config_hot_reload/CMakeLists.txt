@@ -1,0 +1,2 @@
+add_executable(config_hot_reload main.cpp)
+target_link_libraries(config_hot_reload PRIVATE plugin_arch)

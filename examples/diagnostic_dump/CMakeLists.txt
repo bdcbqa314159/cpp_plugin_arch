@@ -1,0 +1,2 @@
+add_executable(diagnostic_dump main.cpp)
+target_link_libraries(diagnostic_dump PRIVATE plugin_arch)

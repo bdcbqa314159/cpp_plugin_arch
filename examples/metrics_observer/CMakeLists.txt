@@ -1,0 +1,2 @@
+add_executable(metrics_observer main.cpp)
+target_link_libraries(metrics_observer PRIVATE plugin_arch)
