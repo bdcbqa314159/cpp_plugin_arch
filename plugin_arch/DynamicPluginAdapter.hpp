@@ -97,6 +97,8 @@ class DynamicPluginAdapter : public IPlugin,
       keys.push_back(k.c_str());
       values.push_back(v.c_str());
     }
+    // C ABI uses int for count — safe as long as config has < INT_MAX entries.
+    static_assert(sizeof(int) >= 4, "int must be at least 32-bit");
     configure_func_(static_cast<int>(keys.size()), keys.data(), values.data());
   }
 
