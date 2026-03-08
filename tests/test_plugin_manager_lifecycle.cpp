@@ -97,6 +97,26 @@ static PluginEntry make_entry(const std::string& name,
 
 // --- Tests ---
 
+TEST_CASE("add_plugin: nullptr instance throws", "[manager][lifecycle]") {
+  PluginManager manager;
+  CHECK_THROWS_AS(
+      manager.add_plugin(nullptr, make_entry("Null", "null")),
+      std::runtime_error);
+}
+
+TEST_CASE("add_plugin: duplicate name throws", "[manager][lifecycle]") {
+  PluginManager manager;
+  manager.add_plugin(std::make_shared<MockLogger>(),
+                     make_entry("MockLogger", "logger", "2.0.0"));
+
+  CHECK_THROWS_AS(
+      manager.add_plugin(std::make_shared<MockLogger>(),
+                         make_entry("MockLogger", "logger2", "1.0.0")),
+      std::runtime_error);
+
+  manager.shutdown();
+}
+
 TEST_CASE("PluginManager: add_plugin and get_plugin", "[manager][lifecycle]") {
   PluginManager manager;
   auto logger = std::make_shared<MockLogger>();

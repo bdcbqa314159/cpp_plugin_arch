@@ -342,6 +342,13 @@ class PluginManager {
   void add_plugin(std::shared_ptr<IPlugin> instance,
                   const PluginEntry& entry,
                   const ConfigMap& config_map = {}) {
+    if (!instance) {
+      throw std::runtime_error("add_plugin: instance must not be null");
+    }
+    if (name_index_.contains(entry.name)) {
+      throw std::runtime_error("Plugin already loaded: " + entry.name);
+    }
+
     // --- Conflict checks (D5) ---
     auto* conflict_aware = dynamic_cast<IConflictAware*>(instance.get());
     if (conflict_aware) {
