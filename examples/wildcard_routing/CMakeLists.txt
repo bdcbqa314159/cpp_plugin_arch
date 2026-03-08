@@ -1,0 +1,2 @@
+add_executable(wildcard_routing main.cpp)
+target_link_libraries(wildcard_routing PRIVATE plugin_arch)
