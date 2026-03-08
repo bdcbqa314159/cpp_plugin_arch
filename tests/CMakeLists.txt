@@ -10,9 +10,12 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(plugin_arch_tests
     test_plugin_error.cpp
     test_event_bus.cpp
+    test_typed_event_bus.cpp
     test_mock_plugin_loader.cpp
     test_topological_sort.cpp
     test_service_locator.cpp
+    test_semver.cpp
+    test_plugin_manager_lifecycle.cpp
 )
 
 target_link_libraries(plugin_arch_tests PRIVATE

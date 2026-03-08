@@ -9,6 +9,8 @@
 #include "PluginLoader.hpp"
 #include "DynamicLibrary.hpp"
 #include "PluginDescriptor.hpp"
+#include "DynamicPluginAdapter.hpp"
+#include "SemVer.hpp"
 
 // --- Discovery & Communication ---
 #include "PluginRegistry.hpp"

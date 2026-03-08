@@ -1,18 +1,22 @@
 // High-level plugin orchestrator.
 //
-// Composes PluginRegistry, PluginLoader, ServiceLocator, EventBus and the
-// opt-in mixins (IConfigurable, IServiceAware, IEventAware, ILifecycleAware,
-// IDependencyAware) into a single component that handles:
-//   - Discovery via PluginRegistry::scan()
+// Composes PluginRegistry, PluginLoader, ServiceLocator, EventBus,
+// DynamicPluginAdapter, and the opt-in mixins into a single component
+// that handles:
+//   - Discovery via PluginRegistry::scan() (typed + C ABI plugins)
 //   - Dependency ordering via topological sort (Kahn's algorithm)
-//   - Loading via PluginLoader<IPlugin>
+//   - Version constraint checking (SemVer)
+//   - Loading via PluginLoader<IPlugin> or DynamicPluginAdapter
 //   - Wiring: configure() → set_service_locator() → set_event_bus() → on_init()
+//   - Per-plugin unload with reverse-dependency cascade
+//   - Per-plugin reload with state preservation
 //   - Shutdown in reverse order
 //
 // Throws PluginError on load failures, std::runtime_error on cycles / missing deps.
 
 #pragma once
 
+#include <algorithm>
 #include <exception>
 #include <future>
 #include <memory>
@@ -24,29 +28,32 @@
 #include <unordered_set>
 #include <vector>
 
+#include "DynamicPluginAdapter.hpp"
 #include "EventBus.hpp"
 #include "IConfigurable.hpp"
 #include "IDependencyAware.hpp"
 #include "IEventAware.hpp"
 #include "ILifecycleAware.hpp"
 #include "IPlugin.hpp"
+#include "ISerializable.hpp"
 #include "IServiceAware.hpp"
 #include "PluginLoader.hpp"
 #include "PluginRegistry.hpp"
+#include "SemVer.hpp"
 #include "ServiceLocator.hpp"
 
 namespace plugin_arch {
 
 enum class LoadPolicy {
-  strict,       // throw on first failure (default)
-  best_effort   // skip failed plugins, record errors
+  strict,      // throw on first failure (default)
+  best_effort  // skip failed plugins, record errors
 };
 
 // Plugin metadata + dependency list — used for discovery and topological sort.
 // Public so tests and hosts can construct instances for PluginManager::add_plugin().
 struct PluginInfo {
   PluginEntry entry;
-  std::vector<std::string> deps;
+  std::vector<std::string> deps;  // type strings (version stripped)
 };
 
 // Kahn's algorithm — returns indices grouped by topological level.
@@ -86,7 +93,6 @@ inline std::vector<std::vector<std::size_t>> topological_sort_levels(
   std::size_t processed = 0;
 
   while (!ready.empty()) {
-    // Drain all currently ready nodes — they form one level
     std::vector<std::size_t> level;
     std::size_t level_size = ready.size();
     for (std::size_t i = 0; i < level_size; ++i) {
@@ -124,7 +130,17 @@ class PluginManager {
   // Per-plugin configuration, keyed by plugin name.
   using ConfigMap = std::unordered_map<std::string, PluginConfig>;
 
+  // State for a loaded plugin — tracks everything needed for unload/reload.
+  struct LoadedPlugin {
+    std::shared_ptr<IPlugin> instance;
+    std::optional<PluginLoader<IPlugin>> loader;  // nullopt for add_plugin()
+                                                  // and C ABI adapters
+    PluginEntry entry;
+    std::vector<std::string> deps;  // dependency type strings
+  };
+
   // Scan a directory and load all discovered plugins in dependency order.
+  // Supports both typed (IPlugin) and C ABI (PluginDescriptor) plugins.
   // config_map provides optional per-plugin configuration keyed by plugin name.
   // policy: strict (throw on first failure) or best_effort (skip, record errors).
   void load_all(const std::filesystem::path& directory,
@@ -134,7 +150,6 @@ class PluginManager {
 
     auto [infos, levels] = discover_and_sort(directory, policy, &load_errors_);
 
-    // Track failed types so dependents are skipped in best_effort mode.
     std::unordered_set<std::string> failed_types;
 
     for (const auto& level : levels) {
@@ -142,7 +157,7 @@ class PluginManager {
         const auto& info = infos[idx];
 
         if (policy == LoadPolicy::strict) {
-          load_and_wire(info.entry, config_map);
+          load_and_wire(info.entry, info.deps, config_map);
           continue;
         }
 
@@ -152,7 +167,7 @@ class PluginManager {
         }
 
         try {
-          load_and_wire(info.entry, config_map);
+          load_and_wire(info.entry, info.deps, config_map);
         } catch (const std::exception& e) {
           failed_types.insert(info.entry.type);
           load_errors_.push_back({info.entry.path, e.what()});
@@ -175,7 +190,6 @@ class PluginManager {
     std::unordered_set<std::string> failed_types;
 
     for (const auto& level : levels) {
-      // Filter out plugins with failed dependencies (best_effort).
       std::vector<std::size_t> loadable;
       for (std::size_t idx : level) {
         if (policy == LoadPolicy::best_effort &&
@@ -187,17 +201,17 @@ class PluginManager {
       }
 
       if (loadable.size() <= 1) {
-        // Single plugin (or empty after filtering) — no async overhead.
         for (std::size_t idx : loadable) {
-          try_load_and_wire(infos[idx].entry, config_map, policy, failed_types);
+          try_load_and_wire(infos[idx].entry, infos[idx].deps, config_map,
+                            policy, failed_types);
         }
         continue;
       }
 
       // Parallel load: dlopen + get_instance on separate threads.
       struct LoadResult {
-        std::optional<PluginLoader<IPlugin>> loader;
         std::shared_ptr<IPlugin> instance;
+        std::optional<PluginLoader<IPlugin>> loader;
         std::size_t info_idx;
         std::exception_ptr error;
       };
@@ -207,19 +221,23 @@ class PluginManager {
 
       for (std::size_t idx : loadable) {
         const auto& entry = infos[idx].entry;
-        futures.push_back(std::async(std::launch::async,
-            [&entry, idx]() -> LoadResult {
+        futures.push_back(
+            std::async(std::launch::async, [&entry, idx]() -> LoadResult {
               try {
+                if (entry.is_dynamic) {
+                  auto adapter =
+                      DynamicPluginAdapter::load(entry.path.string());
+                  return {std::move(adapter), std::nullopt, idx, {}};
+                }
                 PluginLoader<IPlugin> loader(entry.path.string());
                 auto instance = loader.get_instance();
-                return {std::move(loader), std::move(instance), idx, {}};
+                return {std::move(instance), std::move(loader), idx, {}};
               } catch (...) {
-                return {std::nullopt, nullptr, idx, std::current_exception()};
+                return {nullptr, std::nullopt, idx, std::current_exception()};
               }
             }));
       }
 
-      // Collect results and wire sequentially.
       for (auto& fut : futures) {
         auto result = fut.get();
         if (result.error) {
@@ -235,10 +253,14 @@ class PluginManager {
           }
           std::rethrow_exception(result.error);
         }
-        wire_instance(result.instance, infos[result.info_idx].entry, config_map);
+        wire_instance(result.instance, infos[result.info_idx].entry,
+                      config_map);
         locator_.add(result.instance);
-        loaders_.push_back(std::move(*result.loader));
-        instances_.push_back(std::move(result.instance));
+        plugins_.push_back({std::move(result.instance), std::move(result.loader),
+                            infos[result.info_idx].entry,
+                            infos[result.info_idx].deps});
+        rebuild_name_index();
+        instances_dirty_ = true;
       }
     }
   }
@@ -250,22 +272,148 @@ class PluginManager {
                   const ConfigMap& config_map = {}) {
     wire_instance(instance, entry, config_map);
     locator_.add(instance);
-    instances_.push_back(std::move(instance));
+
+    std::vector<std::string> deps;
+    auto* dep_aware = dynamic_cast<IDependencyAware*>(instance.get());
+    if (dep_aware) {
+      for (const auto& raw_dep : dep_aware->dependencies()) {
+        deps.push_back(Dependency::parse(raw_dep).type);
+      }
+    }
+
+    plugins_.push_back(
+        {std::move(instance), std::nullopt, entry, std::move(deps)});
+    rebuild_name_index();
+    instances_dirty_ = true;
+  }
+
+  // --- Per-plugin unload (A1) ---
+
+  // Unload a single plugin by name. Reverse dependents are unloaded first
+  // (cascade). Calls on_shutdown() on each unloaded plugin.
+  // Throws std::runtime_error if the plugin is not loaded.
+  void unload(const std::string& name) {
+    auto it = name_index_.find(name);
+    if (it == name_index_.end()) {
+      throw std::runtime_error("Plugin not loaded: " + name);
+    }
+
+    // Find all reverse dependents (plugins that depend on this one).
+    auto target_type = plugins_[it->second].entry.type;
+    auto dep_indices = find_reverse_dependents(target_type);
+
+    // Sort by descending index so deepest dependents are shut down first.
+    std::sort(dep_indices.begin(), dep_indices.end(), std::greater<>());
+
+    // Shutdown reverse dependents
+    for (std::size_t idx : dep_indices) {
+      shutdown_plugin(plugins_[idx]);
+    }
+
+    // Shutdown the target
+    shutdown_plugin(plugins_[it->second]);
+
+    // Collect all indices to remove
+    std::unordered_set<std::size_t> to_remove(dep_indices.begin(),
+                                               dep_indices.end());
+    to_remove.insert(it->second);
+
+    // Rebuild plugins_ without the removed entries
+    std::vector<LoadedPlugin> remaining;
+    remaining.reserve(plugins_.size() - to_remove.size());
+    for (std::size_t i = 0; i < plugins_.size(); ++i) {
+      if (!to_remove.contains(i)) {
+        remaining.push_back(std::move(plugins_[i]));
+      }
+    }
+    plugins_ = std::move(remaining);
+    rebuild_name_index();
+    rebuild_locator();
+    instances_dirty_ = true;
+  }
+
+  // --- Per-plugin reload (A1) ---
+
+  // Reload a single plugin by name. The plugin's library is re-loaded from
+  // disk. If the plugin implements ISerializable, state is preserved across
+  // the reload. Reverse dependents are shut down, then re-wired and
+  // re-initialized to pick up the new service instance.
+  // Throws std::runtime_error if the plugin is not loaded.
+  void reload(const std::string& name, const ConfigMap& config_map = {}) {
+    auto it = name_index_.find(name);
+    if (it == name_index_.end()) {
+      throw std::runtime_error("Plugin not loaded: " + name);
+    }
+    std::size_t target_idx = it->second;
+
+    // Find reverse dependents
+    auto target_type = plugins_[target_idx].entry.type;
+    auto dep_indices = find_reverse_dependents(target_type);
+    std::sort(dep_indices.begin(), dep_indices.end(), std::greater<>());
+
+    // Shutdown dependents in reverse order
+    for (std::size_t idx : dep_indices) {
+      shutdown_plugin(plugins_[idx]);
+    }
+
+    // Shutdown target
+    auto& target = plugins_[target_idx];
+    shutdown_plugin(target);
+
+    // Save state if serializable
+    std::string saved_state;
+    bool has_state = false;
+    auto* serializable = dynamic_cast<ISerializable*>(target.instance.get());
+    if (serializable) {
+      saved_state = serializable->save_state();
+      has_state = true;
+    }
+
+    // Re-load the plugin
+    if (target.entry.is_dynamic) {
+      target.instance =
+          DynamicPluginAdapter::load(target.entry.path.string());
+      target.loader = std::nullopt;
+    } else {
+      PluginLoader<IPlugin> new_loader(target.entry.path.string());
+      target.instance = new_loader.get_instance();
+      target.loader = std::move(new_loader);
+    }
+
+    // Restore state
+    if (has_state) {
+      auto* new_ser = dynamic_cast<ISerializable*>(target.instance.get());
+      if (new_ser) {
+        new_ser->restore_state(saved_state);
+      }
+    }
+
+    // Rebuild locator so dependents see the new instance
+    rebuild_locator();
+
+    // Re-wire the target
+    wire_instance(target.instance, target.entry, config_map);
+
+    // Re-wire dependents in forward (load) order
+    std::sort(dep_indices.begin(), dep_indices.end());
+    for (std::size_t idx : dep_indices) {
+      wire_instance(plugins_[idx].instance, plugins_[idx].entry, config_map);
+    }
+
+    instances_dirty_ = true;
   }
 
   // Shut down all plugins in reverse load order.
   void shutdown() {
-    for (auto it = instances_.rbegin(); it != instances_.rend(); ++it) {
-      auto* lifecycle = dynamic_cast<ILifecycleAware*>(it->get());
-      if (lifecycle) {
-        lifecycle->on_shutdown();
-      }
+    for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
+      shutdown_plugin(*it);
     }
-    instances_.clear();
-    loaders_.clear();
+    plugins_.clear();
+    name_index_.clear();
     locator_.clear();
     event_bus_.clear();
     load_errors_.clear();
+    instances_dirty_ = true;
   }
 
   [[nodiscard]] ServiceLocator& locator() { return locator_; }
@@ -274,8 +422,46 @@ class PluginManager {
   [[nodiscard]] EventBus& event_bus() { return event_bus_; }
   [[nodiscard]] const EventBus& event_bus() const { return event_bus_; }
 
-  [[nodiscard]] const std::vector<std::shared_ptr<IPlugin>>& instances() const {
-    return instances_;
+  [[nodiscard]] const std::vector<std::shared_ptr<IPlugin>>& instances()
+      const {
+    if (instances_dirty_) {
+      instances_cache_.clear();
+      instances_cache_.reserve(plugins_.size());
+      for (const auto& lp : plugins_) {
+        instances_cache_.push_back(lp.instance);
+      }
+      instances_dirty_ = false;
+    }
+    return instances_cache_;
+  }
+
+  // Get a loaded plugin by name. Returns nullptr if not found.
+  [[nodiscard]] std::shared_ptr<IPlugin> get_plugin(
+      const std::string& name) const {
+    auto it = name_index_.find(name);
+    if (it == name_index_.end()) return nullptr;
+    return plugins_[it->second].instance;
+  }
+
+  // Check if a plugin is currently loaded.
+  [[nodiscard]] bool is_loaded(const std::string& name) const {
+    return name_index_.contains(name);
+  }
+
+  // Names of plugins that would be unloaded if the given plugin is unloaded
+  // (reverse dependents). Does not include the plugin itself.
+  [[nodiscard]] std::vector<std::string> dependents_of(
+      const std::string& name) const {
+    auto it = name_index_.find(name);
+    if (it == name_index_.end()) return {};
+
+    auto indices = find_reverse_dependents(plugins_[it->second].entry.type);
+    std::vector<std::string> result;
+    result.reserve(indices.size());
+    for (std::size_t idx : indices) {
+      result.push_back(plugins_[idx].entry.name);
+    }
+    return result;
   }
 
   // Errors from best_effort loading (empty in strict mode).
@@ -283,16 +469,86 @@ class PluginManager {
     return load_errors_;
   }
 
+  // Access the internal loaded plugin records (for advanced use).
+  [[nodiscard]] const std::vector<LoadedPlugin>& loaded_plugins() const {
+    return plugins_;
+  }
+
  private:
   ServiceLocator locator_;
   EventBus event_bus_;
-  std::vector<PluginLoader<IPlugin>> loaders_;
-  std::vector<std::shared_ptr<IPlugin>> instances_;
+  std::vector<LoadedPlugin> plugins_;
+  std::unordered_map<std::string, std::size_t> name_index_;
+  mutable std::vector<std::shared_ptr<IPlugin>> instances_cache_;
+  mutable bool instances_dirty_ = true;
   std::vector<ErrorRecord> load_errors_;
+
+  // --- Name index ---
+
+  void rebuild_name_index() {
+    name_index_.clear();
+    for (std::size_t i = 0; i < plugins_.size(); ++i) {
+      name_index_[plugins_[i].entry.name] = i;
+    }
+  }
+
+  // --- Locator rebuild ---
+
+  void rebuild_locator() {
+    locator_.clear();
+    for (const auto& lp : plugins_) {
+      locator_.add(lp.instance);
+    }
+  }
+
+  // --- Reverse dependency graph ---
+
+  // Find indices of all plugins that transitively depend on the given type.
+  std::vector<std::size_t> find_reverse_dependents(
+      const std::string& target_type) const {
+    // Build reverse adjacency: type → indices that depend on it
+    std::unordered_map<std::string, std::vector<std::size_t>> rev_adj;
+    for (std::size_t i = 0; i < plugins_.size(); ++i) {
+      for (const auto& dep : plugins_[i].deps) {
+        rev_adj[dep].push_back(i);
+      }
+    }
+
+    // BFS from target_type
+    std::vector<std::size_t> result;
+    std::unordered_set<std::size_t> visited;
+    std::queue<std::string> bfs_queue;
+    bfs_queue.push(target_type);
+
+    while (!bfs_queue.empty()) {
+      auto type = bfs_queue.front();
+      bfs_queue.pop();
+
+      auto it = rev_adj.find(type);
+      if (it == rev_adj.end()) continue;
+
+      for (std::size_t idx : it->second) {
+        if (visited.insert(idx).second) {
+          result.push_back(idx);
+          bfs_queue.push(plugins_[idx].entry.type);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  // --- Plugin shutdown ---
+
+  static void shutdown_plugin(LoadedPlugin& lp) {
+    auto* lifecycle = dynamic_cast<ILifecycleAware*>(lp.instance.get());
+    if (lifecycle) {
+      lifecycle->on_shutdown();
+    }
+  }
 
   // --- Discovery ---
 
-  // Scan directory, probe each plugin for dependencies, topologically sort.
   struct DiscoveryResult {
     std::vector<PluginInfo> infos;
     std::vector<std::vector<std::size_t>> levels;
@@ -315,11 +571,19 @@ class PluginManager {
       PluginInfo info;
       info.entry = e;
 
-      PluginLoader<IPlugin> probe_loader(e.path.string());
-      auto probe_instance = probe_loader.get_instance();
-      auto* dep_aware = dynamic_cast<IDependencyAware*>(probe_instance.get());
-      if (dep_aware) {
-        info.deps = dep_aware->dependencies();
+      // Probe for dependencies (only typed plugins can declare deps)
+      if (!e.is_dynamic) {
+        PluginLoader<IPlugin> probe_loader(e.path.string());
+        auto probe_instance = probe_loader.get_instance();
+        auto* dep_aware =
+            dynamic_cast<IDependencyAware*>(probe_instance.get());
+        if (dep_aware) {
+          // Parse dependencies: extract type strings, check versions later
+          for (const auto& raw_dep : dep_aware->dependencies()) {
+            auto parsed = Dependency::parse(raw_dep);
+            info.deps.push_back(parsed.type);
+          }
+        }
       }
 
       auto [it, inserted] = type_to_index.try_emplace(e.type, infos.size());
@@ -329,16 +593,59 @@ class PluginManager {
               "Duplicate plugin type '" + e.type + "': '" +
               infos[it->second].entry.name + "' and '" + e.name + "'");
         }
-        // best_effort: skip duplicate, record error
         if (errors_out) {
           errors_out->push_back(
               {e.path, "duplicate plugin type '" + e.type +
-                       "', already provided by '" +
-                       infos[it->second].entry.name + "'"});
+                           "', already provided by '" +
+                           infos[it->second].entry.name + "'"});
         }
         continue;
       }
       infos.push_back(std::move(info));
+    }
+
+    // --- Version constraint checking (A2) ---
+    // After building the type index, verify that each dependency's version
+    // constraint is satisfied by the provider's version.
+    for (const auto& info : infos) {
+      if (info.entry.is_dynamic) continue;
+
+      // Re-probe to get raw dependency strings for version checking
+      try {
+        PluginLoader<IPlugin> probe_loader(info.entry.path.string());
+        auto probe_instance = probe_loader.get_instance();
+        auto* dep_aware =
+            dynamic_cast<IDependencyAware*>(probe_instance.get());
+        if (!dep_aware) continue;
+
+        for (const auto& raw_dep : dep_aware->dependencies()) {
+          auto parsed = Dependency::parse(raw_dep);
+          if (parsed.op == Dependency::Op::any) continue;
+
+          auto provider_it = type_to_index.find(parsed.type);
+          if (provider_it == type_to_index.end()) continue;  // topo sort will catch
+
+          const auto& provider = infos[provider_it->second];
+          auto provider_version = SemVer::parse(provider.entry.version);
+
+          if (!parsed.satisfied_by(provider_version)) {
+            std::string msg = "Plugin '" + info.entry.name +
+                              "' requires " + raw_dep + " but '" +
+                              provider.entry.name + "' provides version " +
+                              provider.entry.version;
+            if (policy == LoadPolicy::strict) {
+              throw std::runtime_error(msg);
+            }
+            if (errors_out) {
+              errors_out->push_back({info.entry.path, msg});
+            }
+          }
+        }
+      } catch (const std::runtime_error&) {
+        throw;  // re-throw version errors
+      } catch (...) {
+        // probe failure — will be caught during loading
+      }
     }
 
     auto levels = topological_sort_levels(infos, type_to_index);
@@ -347,10 +654,11 @@ class PluginManager {
 
   // --- Dependency cascade ---
 
-  static bool has_failed_dep(const PluginInfo& info,
-                             const std::unordered_set<std::string>& failed_types) {
+  static bool has_failed_dep(
+      const PluginInfo& info,
+      const std::unordered_set<std::string>& failed_types) {
     for (const auto& dep : info.deps) {
-      if (failed_types.count(dep)) return true;
+      if (failed_types.contains(dep)) return true;
     }
     return false;
   }
@@ -364,16 +672,15 @@ class PluginManager {
 
   // --- Loading + wiring ---
 
-  // Load a single plugin with policy-aware error handling.
   void try_load_and_wire(const PluginEntry& entry,
-                         const ConfigMap& config_map,
-                         LoadPolicy policy,
+                         const std::vector<std::string>& deps,
+                         const ConfigMap& config_map, LoadPolicy policy,
                          std::unordered_set<std::string>& failed_types) {
     if (policy == LoadPolicy::strict) {
-      load_and_wire(entry, config_map);
+      load_and_wire(entry, deps, config_map);
     } else {
       try {
-        load_and_wire(entry, config_map);
+        load_and_wire(entry, deps, config_map);
       } catch (const std::exception& e) {
         failed_types.insert(entry.type);
         load_errors_.push_back({entry.path, e.what()});
@@ -381,22 +688,32 @@ class PluginManager {
     }
   }
 
-  // Load a single plugin and wire it.
-  void load_and_wire(const PluginEntry& entry, const ConfigMap& config_map) {
-    PluginLoader<IPlugin> loader(entry.path.string());
-    auto instance = loader.get_instance();
+  void load_and_wire(const PluginEntry& entry,
+                     const std::vector<std::string>& deps,
+                     const ConfigMap& config_map) {
+    std::shared_ptr<IPlugin> instance;
+    std::optional<PluginLoader<IPlugin>> loader;
+
+    if (entry.is_dynamic) {
+      instance = DynamicPluginAdapter::load(entry.path.string());
+    } else {
+      PluginLoader<IPlugin> pl(entry.path.string());
+      instance = pl.get_instance();
+      loader = std::move(pl);
+    }
+
     wire_instance(instance, entry, config_map);
     locator_.add(instance);
-    loaders_.push_back(std::move(loader));
-    instances_.push_back(std::move(instance));
+    plugins_.push_back(
+        {std::move(instance), std::move(loader), entry, deps});
+    rebuild_name_index();
+    instances_dirty_ = true;
   }
 
   // Wire all opt-in mixins on an instance.
   // Order matters: configure → inject services → inject events → init.
-  // To add a new mixin: add a dynamic_cast + call block here, before on_init().
   void wire_instance(std::shared_ptr<IPlugin>& instance,
-                     const PluginEntry& entry,
-                     const ConfigMap& config_map) {
+                     const PluginEntry& entry, const ConfigMap& config_map) {
     auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
     if (configurable) {
       if (auto it = config_map.find(entry.name); it != config_map.end()) {
