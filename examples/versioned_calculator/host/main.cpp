@@ -7,6 +7,7 @@
 //
 // No v1 code is modified.  ICalculator is frozen.
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
