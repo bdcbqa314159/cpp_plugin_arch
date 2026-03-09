@@ -342,3 +342,7 @@ cmake --build build
 docker build -t cpp_plugin_arch .
 docker run --rm -v $(pwd):/workspace cpp_plugin_arch
 ```
+
+## Contributing
+
+This is a personal project and is not actively seeking contributions. However, if you find a genuine bug or flaw in the code, please do open a pull request — fork the repo, create a feature branch, and submit a PR with a clear description of the fix.
