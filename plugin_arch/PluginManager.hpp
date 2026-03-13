@@ -60,8 +60,8 @@ enum class LoadPolicy {
 struct PluginInfo {
   PluginEntry entry;
   std::vector<std::string> deps;       // type strings (version stripped, for topo sort)
-  std::vector<std::string> raw_deps;   // original strings (for version checking)
-  std::vector<std::string> conflicts;  // conflicting type strings (B4)
+  std::vector<std::string> version_constraints;   // original strings (for version checking)
+  std::vector<std::string> conflicts;  // mutually exclusive type strings
 };
 
 // Kahn's algorithm — returns indices grouped by topological level.
@@ -189,12 +189,124 @@ inline std::vector<std::vector<std::size_t>> topological_sort_levels(
   return levels;
 }
 
+// Check version constraints between discovered plugins.
+// Throws in strict mode, records errors in best_effort mode.
+inline void check_version_constraints(
+    const std::vector<PluginInfo>& infos,
+    const std::unordered_map<std::string, std::size_t>& type_to_index,
+    LoadPolicy policy,
+    std::vector<ErrorRecord>* errors_out) {
+  for (const auto& info : infos) {
+    for (const auto& raw_dep : info.version_constraints) {
+      try {
+        auto parsed = Dependency::parse(raw_dep);
+        if (parsed.op == Dependency::Op::any) continue;
+
+        auto provider_it = type_to_index.find(parsed.type);
+        if (provider_it == type_to_index.end()) continue;  // topo sort will catch
+
+        const auto& provider = infos[provider_it->second];
+        auto provider_version = SemVer::parse(provider.entry.version);
+
+        if (!parsed.satisfied_by(provider_version)) {
+          std::string msg = "Plugin '" + info.entry.name +
+                            "' requires " + raw_dep + " but '" +
+                            provider.entry.name + "' provides version " +
+                            provider.entry.version;
+          if (policy == LoadPolicy::strict) {
+            throw std::runtime_error(msg);
+          }
+          if (errors_out) {
+            errors_out->push_back({info.entry.path, msg});
+          }
+        }
+      } catch (const std::runtime_error& e) {
+        if (policy == LoadPolicy::strict) throw;
+        if (errors_out) {
+          errors_out->push_back({info.entry.path, e.what()});
+        }
+      }
+    }
+  }
+}
+
+// Check mutual exclusion constraints between discovered plugins.
+// Throws in strict mode, records errors in best_effort mode.
+inline void check_conflict_constraints(
+    const std::vector<PluginInfo>& infos,
+    const std::unordered_map<std::string, std::size_t>& type_to_index,
+    LoadPolicy policy,
+    std::vector<ErrorRecord>* errors_out) {
+  for (const auto& info : infos) {
+    for (const auto& conflict_type : info.conflicts) {
+      auto conflict_it = type_to_index.find(conflict_type);
+      if (conflict_it == type_to_index.end()) continue;
+
+      std::string msg = "Plugin '" + info.entry.name +
+                        "' conflicts with '" +
+                        infos[conflict_it->second].entry.name +
+                        "' (type: " + conflict_type + ")";
+      if (policy == LoadPolicy::strict) {
+        throw std::runtime_error(msg);
+      }
+      if (errors_out) {
+        errors_out->push_back({info.entry.path, msg});
+      }
+    }
+  }
+}
+
+// Validate a config map against a plugin's IConfigSchema.
+// Pure query — does not mutate the config.
+// Returns a list of error messages (empty = valid).
+inline std::vector<std::string> validate_plugin_config(
+    IPlugin* instance, const PluginConfig& config) {
+  if (!instance) return {};
+  auto* schema_aware = dynamic_cast<IConfigSchema*>(instance);
+  if (!schema_aware) return {};  // no schema = always valid
+
+  std::vector<std::string> errors;
+  auto schema = schema_aware->config_schema();
+
+  std::unordered_set<std::string> known_keys;
+  for (const auto& key_def : schema) {
+    known_keys.insert(key_def.key);
+    if (config.find(key_def.key) == config.end()) {
+      if (key_def.required) {
+        errors.push_back("Missing required config key: " + key_def.key);
+      }
+    }
+  }
+
+  for (const auto& [key, value] : config) {
+    if (!known_keys.contains(key)) {
+      errors.push_back("Unknown config key: " + key);
+    }
+  }
+
+  return errors;
+}
+
+// Apply default values from a plugin's IConfigSchema to a config map.
+// Inserts defaults for optional keys that are absent.
+inline void apply_config_defaults(IPlugin* instance, PluginConfig& config) {
+  if (!instance) return;
+  auto* schema_aware = dynamic_cast<IConfigSchema*>(instance);
+  if (!schema_aware) return;
+
+  for (const auto& key_def : schema_aware->config_schema()) {
+    if (config.find(key_def.key) == config.end() &&
+        !key_def.required && !key_def.default_value.empty()) {
+      config[key_def.key] = key_def.default_value;
+    }
+  }
+}
+
 class PluginManager {
  public:
   // Per-plugin configuration, keyed by plugin name.
   using ConfigMap = std::unordered_map<std::string, PluginConfig>;
 
-  // State for a loaded plugin — tracks everything needed for unload/reload.
   // Per-plugin health report.
   struct PluginHealthReport {
     std::string plugin_name;
@@ -208,8 +320,8 @@ class PluginManager {
                                                   // and C ABI adapters
     PluginEntry entry;
     std::vector<std::string> deps;  // dependency type strings
-    bool enabled = true;            // B2: can be disabled without unloading
-    std::vector<EventBus::SubscriptionId> subscription_ids;  // B2: tracked for disable
+    bool enabled = true;
+    std::vector<EventBus::SubscriptionId> subscription_ids;  // tracked for disable/unsubscribe
   };
 
   // Scan a directory and load all discovered plugins in dependency order.
@@ -219,9 +331,19 @@ class PluginManager {
   void load_all(const std::filesystem::path& directory,
                 const ConfigMap& config_map = {},
                 LoadPolicy policy = LoadPolicy::strict) {
+    PluginRegistry registry;
+    (void)registry.scan(directory);
+    load_all(registry, config_map, policy);
+  }
+
+  // Load from a pre-populated registry. Allows hosts to use custom discovery
+  // (e.g., database-backed, network, or filtered) instead of directory scanning.
+  void load_all(PluginRegistry& registry,
+                const ConfigMap& config_map = {},
+                LoadPolicy policy = LoadPolicy::strict) {
     load_errors_.clear();
 
-    auto [infos, levels] = discover_and_sort(directory, policy, &load_errors_);
+    auto [infos, levels] = discover_and_sort(registry, policy, &load_errors_);
 
     std::unordered_set<std::string> failed_types;
 
@@ -256,9 +378,11 @@ class PluginManager {
   void load_all_parallel(const std::filesystem::path& directory,
                          const ConfigMap& config_map = {},
                          LoadPolicy policy = LoadPolicy::strict) {
+    PluginRegistry registry;
+    (void)registry.scan(directory);
     load_errors_.clear();
 
-    auto [infos, levels] = discover_and_sort(directory, policy, &load_errors_);
+    auto [infos, levels] = discover_and_sort(registry, policy, &load_errors_);
 
     std::unordered_set<std::string> failed_types;
 
@@ -349,7 +473,7 @@ class PluginManager {
       throw std::runtime_error("Plugin already loaded: " + entry.name);
     }
 
-    // --- Conflict checks (D5) ---
+    // --- Conflict checks ---
     auto* conflict_aware = dynamic_cast<IConflictAware*>(instance.get());
     if (conflict_aware) {
       for (const auto& conflict_type : conflict_aware->conflicts()) {
@@ -376,7 +500,7 @@ class PluginManager {
       }
     }
 
-    // --- Dependency + version checks (D6) ---
+    // --- Dependency + version checks ---
     // add_plugin is permissive about missing deps (provider may be added
     // later — the reverse version check on line ~407 catches mismatches
     // when the provider arrives). Version constraints are still validated
@@ -406,7 +530,7 @@ class PluginManager {
       }
     }
 
-    // --- Reverse version check (L1-D6) ---
+    // --- Reverse version check ---
     // Existing plugins may depend on this plugin's type with a version constraint.
     for (const auto& lp : plugins_) {
       auto* existing_dep = dynamic_cast<IDependencyAware*>(lp.instance.get());
@@ -425,26 +549,11 @@ class PluginManager {
       }
     }
 
-    // Pre-validate config before committing (C2).
-    auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
-    if (configurable) {
-      auto* schema_aware = dynamic_cast<IConfigSchema*>(instance.get());
-      if (schema_aware) {
-        auto cfg_it = config_map.find(entry.name);
-        PluginConfig check_config = (cfg_it != config_map.end())
-                                        ? cfg_it->second
-                                        : PluginConfig{};
-        auto errors = validate_config(instance.get(), check_config);
-        if (!errors.empty()) {
-          std::string msg = "Config validation failed for '" + entry.name + "': ";
-          for (std::size_t i = 0; i < errors.size(); ++i) {
-            if (i > 0) msg += "; ";
-            msg += errors[i];
-          }
-          throw std::runtime_error(msg);
-        }
-      }
-    }
+    // Pre-validate config before committing.
+    // Uses resolve_plugin_config which validates and prepares defaults.
+    // The actual configure() call happens later in wire_instance_tracked.
+    (void)resolve_plugin_config(
+        instance.get(), entry.name, config_map, /*skip_validation=*/false);
 
     locator_.add(instance);
     plugins_.push_back(
@@ -455,7 +564,7 @@ class PluginManager {
 
   }
 
-  // --- Per-plugin unload (A1) ---
+  // --- Per-plugin unload ---
 
   // Unload a single plugin by name. Reverse dependents are unloaded first
   // (cascade). Calls on_shutdown() on each unloaded plugin.
@@ -502,7 +611,7 @@ class PluginManager {
 
   }
 
-  // --- Per-plugin reload (A1) ---
+  // --- Per-plugin reload ---
 
   // Reload a single plugin by name. The plugin's library is re-loaded from
   // disk. If the plugin implements ISerializable, state is preserved across
@@ -575,7 +684,7 @@ class PluginManager {
 
   }
 
-  // --- Health checks (B1) ---
+  // --- Health checks ---
 
   // Check health of all loaded, enabled plugins that implement IHealthAware.
   // Returns reports for unhealthy plugins, or all if include_healthy is true.
@@ -597,7 +706,7 @@ class PluginManager {
     return reports;
   }
 
-  // --- Enable/disable (B2) ---
+  // --- Enable/disable ---
 
   // Disable a plugin: calls on_shutdown(), unsubscribes from EventBus,
   // but keeps it registered. ServiceLocator queries via get_service<T>()
@@ -661,7 +770,7 @@ class PluginManager {
     return nullptr;
   }
 
-  // --- Plugin groups (C1) ---
+  // --- Plugin groups ---
 
   // Get names of all loaded plugins that have the given capability.
   // Uses IPluginMetadata::capabilities() for grouping.
@@ -711,48 +820,15 @@ class PluginManager {
     }
   }
 
-  // --- Config validation (C2) ---
+  // --- Config validation ---
 
-  // Validate a config map against IConfigSchema for a specific plugin instance.
-  // Returns a list of error messages (empty = valid).
-  // Also applies defaults for missing optional keys.
+  // Validate config (pure query, no mutation). Delegates to free function.
   [[nodiscard]] static std::vector<std::string> validate_config(
-      IPlugin* instance, PluginConfig& config) {
-    if (!instance) return {};
-    auto* schema_aware = dynamic_cast<IConfigSchema*>(instance);
-    if (!schema_aware) return {};  // no schema = always valid
-
-    std::vector<std::string> errors;
-    auto schema = schema_aware->config_schema();
-
-    // Build set of known keys
-    std::unordered_set<std::string> known_keys;
-    for (const auto& key_def : schema) {
-      known_keys.insert(key_def.key);
-    }
-
-    // Check required keys and apply defaults
-    for (const auto& key_def : schema) {
-      if (config.find(key_def.key) == config.end()) {
-        if (key_def.required) {
-          errors.push_back("Missing required config key: " + key_def.key);
-        } else if (!key_def.default_value.empty()) {
-          config[key_def.key] = key_def.default_value;
-        }
-      }
-    }
-
-    // Reject unknown keys
-    for (const auto& [key, value] : config) {
-      if (!known_keys.contains(key)) {
-        errors.push_back("Unknown config key: " + key);
-      }
-    }
-
-    return errors;
+      IPlugin* instance, const PluginConfig& config) {
+    return validate_plugin_config(instance, config);
   }
 
-  // --- Observability hooks (C4) ---
+  // --- Observability hooks ---
 
   // Add an observer for plugin lifecycle events.
   void add_observer(PluginObserver* observer) {
@@ -765,7 +841,7 @@ class PluginManager {
     std::erase(observers_, observer);
   }
 
-  // --- Dependency graph (C3) ---
+  // --- Dependency graph ---
 
   // Returns a human-readable dependency graph of all loaded plugins.
   // Format: "PluginName (type) -> dep1, dep2"
@@ -785,6 +861,18 @@ class PluginManager {
       lines.push_back(std::move(line));
     }
     return lines;
+  }
+
+  // --- Custom mixin wiring (extensibility) ---
+
+  // Register a custom wiring step. Called for every plugin during wire_instance,
+  // after built-in mixin injection (configure, service locator, event bus) and
+  // before on_init(). Allows hosts to wire custom mixins without modifying
+  // PluginManager source.
+  using MixinWirer = std::function<void(std::shared_ptr<IPlugin>&)>;
+
+  void add_mixin_wirer(MixinWirer wirer) {
+    if (wirer) custom_wirers_.push_back(std::move(wirer));
   }
 
   // Shut down all plugins in reverse load order.
@@ -861,6 +949,7 @@ class PluginManager {
   std::unordered_map<std::string, std::size_t> name_index_;
   std::vector<ErrorRecord> load_errors_;
   std::vector<PluginObserver*> observers_;
+  std::vector<MixinWirer> custom_wirers_;
 
   // --- Observer notification ---
 
@@ -891,7 +980,7 @@ class PluginManager {
 
   // --- Locator rebuild ---
 
-  // Only adds enabled plugins — disabled plugins are invisible to the locator (D8).
+  // Only adds enabled plugins — disabled plugins are invisible to the locator.
   void rebuild_locator() {
     locator_.clear();
     for (const auto& lp : plugins_) {
@@ -974,12 +1063,9 @@ class PluginManager {
   };
 
   static DiscoveryResult discover_and_sort(
-      const std::filesystem::path& directory,
+      PluginRegistry& registry,
       LoadPolicy policy = LoadPolicy::strict,
       std::vector<ErrorRecord>* errors_out = nullptr) {
-    PluginRegistry registry;
-    (void)registry.scan(directory);
-
     const auto& entries = registry.entries();
     if (entries.empty()) return {};
 
@@ -998,8 +1084,8 @@ class PluginManager {
         auto* dep_aware =
             dynamic_cast<IDependencyAware*>(probe_instance.get());
         if (dep_aware) {
-          info.raw_deps = dep_aware->dependencies();
-          for (const auto& raw_dep : info.raw_deps) {
+          info.version_constraints = dep_aware->dependencies();
+          for (const auto& raw_dep : info.version_constraints) {
             auto parsed = Dependency::parse(raw_dep);
             info.deps.push_back(parsed.type);
           }
@@ -1030,61 +1116,8 @@ class PluginManager {
       infos.push_back(std::move(info));
     }
 
-    // --- Version constraint checking (A2) ---
-    // Uses raw_deps saved during probe — no re-loading needed.
-    for (const auto& info : infos) {
-      for (const auto& raw_dep : info.raw_deps) {
-        try {
-          auto parsed = Dependency::parse(raw_dep);
-          if (parsed.op == Dependency::Op::any) continue;
-
-          auto provider_it = type_to_index.find(parsed.type);
-          if (provider_it == type_to_index.end()) continue;  // topo sort will catch
-
-          const auto& provider = infos[provider_it->second];
-          auto provider_version = SemVer::parse(provider.entry.version);
-
-          if (!parsed.satisfied_by(provider_version)) {
-            std::string msg = "Plugin '" + info.entry.name +
-                              "' requires " + raw_dep + " but '" +
-                              provider.entry.name + "' provides version " +
-                              provider.entry.version;
-            if (policy == LoadPolicy::strict) {
-              throw std::runtime_error(msg);
-            }
-            if (errors_out) {
-              errors_out->push_back({info.entry.path, msg});
-            }
-          }
-        } catch (const std::runtime_error& e) {
-          // In strict mode, version mismatches propagate.
-          // In best_effort, record and continue.
-          if (policy == LoadPolicy::strict) throw;
-          if (errors_out) {
-            errors_out->push_back({info.entry.path, e.what()});
-          }
-        }
-      }
-    }
-
-    // --- Conflict checking (B4) ---
-    for (const auto& info : infos) {
-      for (const auto& conflict_type : info.conflicts) {
-        auto conflict_it = type_to_index.find(conflict_type);
-        if (conflict_it == type_to_index.end()) continue;
-
-        std::string msg = "Plugin '" + info.entry.name +
-                          "' conflicts with '" +
-                          infos[conflict_it->second].entry.name +
-                          "' (type: " + conflict_type + ")";
-        if (policy == LoadPolicy::strict) {
-          throw std::runtime_error(msg);
-        }
-        if (errors_out) {
-          errors_out->push_back({info.entry.path, msg});
-        }
-      }
-    }
+    check_version_constraints(infos, type_to_index, policy, errors_out);
+    check_conflict_constraints(infos, type_to_index, policy, errors_out);
 
     auto levels = topological_sort_levels(infos, type_to_index);
     return {std::move(infos), std::move(levels)};
@@ -1149,53 +1182,44 @@ class PluginManager {
 
   }
 
+  // Resolve, validate, and apply config for a plugin.
+  // Returns the final config if the plugin is configurable, or nullopt.
+  static std::optional<PluginConfig> resolve_plugin_config(
+      IPlugin* instance, const std::string& name,
+      const ConfigMap& config_map, bool skip_validation) {
+    auto* configurable = dynamic_cast<IConfigurable*>(instance);
+    if (!configurable) return std::nullopt;
+
+    auto cfg_it = config_map.find(name);
+    PluginConfig config = (cfg_it != config_map.end())
+                              ? cfg_it->second
+                              : PluginConfig{};
+
+    if (!skip_validation) {
+      auto errors = validate_plugin_config(instance, config);
+      if (!errors.empty()) {
+        std::string msg = "Config validation failed for '" + name + "': ";
+        for (std::size_t i = 0; i < errors.size(); ++i) {
+          if (i > 0) msg += "; ";
+          msg += errors[i];
+        }
+        throw std::runtime_error(msg);
+      }
+    }
+
+    apply_config_defaults(instance, config);
+    return config;
+  }
+
   // Wire all opt-in mixins on an instance.
-  // Order matters: validate config → configure → inject services → inject events → init.
-  // skip_validation: set true when caller has already validated (e.g. add_plugin).
+  // Order: validate+configure → inject services → inject events → custom wirers → init.
   void wire_instance(std::shared_ptr<IPlugin>& instance,
                      const PluginEntry& entry, const ConfigMap& config_map,
                      bool skip_validation = false) {
-    auto* configurable = dynamic_cast<IConfigurable*>(instance.get());
-    if (configurable) {
-      auto cfg_it = config_map.find(entry.name);
-      if (cfg_it != config_map.end()) {
-        PluginConfig config_copy = cfg_it->second;
-        if (!skip_validation) {
-          auto errors = validate_config(instance.get(), config_copy);
-          if (!errors.empty()) {
-            std::string msg = "Config validation failed for '" + entry.name + "': ";
-            for (std::size_t i = 0; i < errors.size(); ++i) {
-              if (i > 0) msg += "; ";
-              msg += errors[i];
-            }
-            throw std::runtime_error(msg);
-          }
-        } else {
-          // Still need to apply defaults even when skipping validation.
-          (void)validate_config(instance.get(), config_copy);
-        }
-        configurable->configure(config_copy);
-      } else {
-        // No config provided — check for required keys with no defaults.
-        PluginConfig empty_config;
-        if (!skip_validation) {
-          auto errors = validate_config(instance.get(), empty_config);
-          if (!errors.empty()) {
-            std::string msg = "Config validation failed for '" + entry.name + "': ";
-            for (std::size_t i = 0; i < errors.size(); ++i) {
-              if (i > 0) msg += "; ";
-              msg += errors[i];
-            }
-            throw std::runtime_error(msg);
-          }
-        } else {
-          (void)validate_config(instance.get(), empty_config);
-        }
-        if (!empty_config.empty()) {
-          // Defaults were applied — configure with them.
-          configurable->configure(empty_config);
-        }
-      }
+    auto resolved = resolve_plugin_config(
+        instance.get(), entry.name, config_map, skip_validation);
+    if (resolved) {
+      dynamic_cast<IConfigurable*>(instance.get())->configure(*resolved);
     }
 
     auto* aware = dynamic_cast<IServiceAware*>(instance.get());
@@ -1206,6 +1230,11 @@ class PluginManager {
     auto* event_aware = dynamic_cast<IEventAware*>(instance.get());
     if (event_aware) {
       event_aware->set_event_bus(event_bus_);
+    }
+
+    // Custom mixin wirers registered by the host.
+    for (const auto& wirer : custom_wirers_) {
+      wirer(instance);
     }
 
     // on_init() must be last — plugin may use injected services/events.

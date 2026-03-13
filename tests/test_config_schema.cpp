@@ -101,7 +101,8 @@ TEST_CASE("Config schema: validate_config with all keys provided",
 
   auto errors = PluginManager::validate_config(&plugin, config);
   CHECK(errors.empty());
-  // "timeout" should get default applied
+  // Defaults are applied separately via apply_config_defaults.
+  apply_config_defaults(&plugin, config);
   CHECK(config["timeout"] == "30");
 }
 
@@ -121,6 +122,7 @@ TEST_CASE("Config schema: defaults applied for optional keys",
 
   auto errors = PluginManager::validate_config(&plugin, config);
   CHECK(errors.empty());
+  apply_config_defaults(&plugin, config);
   CHECK(config["port"] == "5432");
   CHECK(config["timeout"] == "30");
 }

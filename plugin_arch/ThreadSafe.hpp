@@ -249,11 +249,23 @@ class ThreadSafe<PluginManager> {
     inner_.load_all(directory, config_map, policy);
   }
 
+  void load_all(PluginRegistry& registry,
+                const PluginManager::ConfigMap& config_map = {},
+                LoadPolicy policy = LoadPolicy::strict) {
+    std::unique_lock lock(mutex_);
+    inner_.load_all(registry, config_map, policy);
+  }
+
   void load_all_parallel(const std::filesystem::path& directory,
                          const PluginManager::ConfigMap& config_map = {},
                          LoadPolicy policy = LoadPolicy::strict) {
     std::unique_lock lock(mutex_);
     inner_.load_all_parallel(directory, config_map, policy);
+  }
+
+  void add_mixin_wirer(PluginManager::MixinWirer wirer) {
+    std::unique_lock lock(mutex_);
+    inner_.add_mixin_wirer(std::move(wirer));
   }
 
   void add_plugin(std::shared_ptr<IPlugin> instance,

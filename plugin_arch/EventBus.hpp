@@ -167,9 +167,9 @@ class EventBus {
 
     const auto& topic = topic_it->second;
 
-    if (erase_by_id(subscriptions_, topic, id) ||
-        erase_typed_by_id(typed_subscriptions_, topic, id) ||
-        erase_vetoable_by_id(vetoable_subscriptions_, topic, id)) {
+    if (erase_subscription_by_id(subscriptions_, topic, id) ||
+        erase_subscription_by_id(typed_subscriptions_, topic, id) ||
+        erase_subscription_by_id(vetoable_subscriptions_, topic, id)) {
       id_to_topic_.erase(topic_it);
       return true;
     }
@@ -256,34 +256,10 @@ class EventBus {
                      });
   }
 
-  // Erase helpers for unsubscribe — search each map type.
-  static bool erase_by_id(
-      std::unordered_map<std::string, std::vector<Subscription>>& map,
-      const std::string& topic, SubscriptionId id) {
-    auto it = map.find(topic);
-    if (it == map.end()) return false;
-    auto& subs = it->second;
-    for (auto sit = subs.begin(); sit != subs.end(); ++sit) {
-      if (sit->id == id) { subs.erase(sit); return true; }
-    }
-    return false;
-  }
-
-  static bool erase_typed_by_id(
-      std::unordered_map<std::string, std::vector<TypedSubscription>>& map,
-      const std::string& topic, SubscriptionId id) {
-    auto it = map.find(topic);
-    if (it == map.end()) return false;
-    auto& subs = it->second;
-    for (auto sit = subs.begin(); sit != subs.end(); ++sit) {
-      if (sit->id == id) { subs.erase(sit); return true; }
-    }
-    return false;
-  }
-
-  static bool erase_vetoable_by_id(
-      std::unordered_map<std::string, std::vector<VetoableSubscription>>& map,
-      const std::string& topic, SubscriptionId id) {
+  // Erase a subscription by ID from a topic→subscriptions map.
+  template <typename Map>
+  static bool erase_subscription_by_id(Map& map, const std::string& topic,
+                                       SubscriptionId id) {
     auto it = map.find(topic);
     if (it == map.end()) return false;
     auto& subs = it->second;
