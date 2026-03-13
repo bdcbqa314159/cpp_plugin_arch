@@ -51,6 +51,14 @@ struct ErrorRecord {
 
 class PluginRegistry {
  public:
+  PluginRegistry() = default;
+  ~PluginRegistry() = default;
+
+  PluginRegistry(const PluginRegistry&) = delete;
+  PluginRegistry& operator=(const PluginRegistry&) = delete;
+  PluginRegistry(PluginRegistry&&) = default;
+  PluginRegistry& operator=(PluginRegistry&&) = default;
+
   // Scan a directory for shared libraries and probe each one for metadata.
   // Appends to existing entries, so you can scan multiple directories.
   // Returns the number of new plugins discovered in this call.

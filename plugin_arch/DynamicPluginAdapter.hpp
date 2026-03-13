@@ -112,6 +112,10 @@ class DynamicPluginAdapter : public IPlugin,
     return lib_->has(func_name);
   }
 
+  // WARNING: function_count and functions come from the plugin — the framework
+  // cannot validate that function_count matches the actual array length.
+  // Callers iterating functions must not trust function_count blindly if the
+  // plugin source is untrusted.
   [[nodiscard]] const PluginDescriptor& descriptor() const { return *desc_; }
 
   [[nodiscard]] const std::shared_ptr<DynamicLibrary>& library() const {

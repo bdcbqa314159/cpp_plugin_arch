@@ -19,6 +19,14 @@ namespace plugin_arch {
 
 class ServiceLocator {
  public:
+  ServiceLocator() = default;
+  ~ServiceLocator() = default;
+
+  ServiceLocator(const ServiceLocator&) = delete;
+  ServiceLocator& operator=(const ServiceLocator&) = delete;
+  ServiceLocator(ServiceLocator&&) = default;
+  ServiceLocator& operator=(ServiceLocator&&) = default;
+
   // Register a loaded plugin as a service.
   // The locator holds a weak reference — it does not extend the plugin's lifetime.
   void add(const std::shared_ptr<IPlugin>& service) {

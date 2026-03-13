@@ -8,7 +8,6 @@
 #pragma once
 
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <string>
 
@@ -47,9 +46,7 @@ class HotPluginLoader {
       try {
         reload();
         return true;
-      } catch (const std::exception& e) {
-        std::cerr << "[HotPluginLoader] reload failed: " << e.what()
-                  << " — keeping current version\n";
+      } catch (const std::exception&) {
         last_modified_ = mtime;  // avoid retrying every poll
         return false;
       }

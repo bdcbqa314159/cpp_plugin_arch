@@ -304,6 +304,14 @@ inline void apply_config_defaults(IPlugin* instance, PluginConfig& config) {
 
 class PluginManager {
  public:
+  PluginManager() = default;
+  ~PluginManager() = default;
+
+  PluginManager(const PluginManager&) = delete;
+  PluginManager& operator=(const PluginManager&) = delete;
+  PluginManager(PluginManager&&) = delete;
+  PluginManager& operator=(PluginManager&&) = delete;
+
   // Per-plugin configuration, keyed by plugin name.
   using ConfigMap = std::unordered_map<std::string, PluginConfig>;
 
@@ -869,7 +877,7 @@ class PluginManager {
   // after built-in mixin injection (configure, service locator, event bus) and
   // before on_init(). Allows hosts to wire custom mixins without modifying
   // PluginManager source.
-  using MixinWirer = std::function<void(std::shared_ptr<IPlugin>&)>;
+  using MixinWirer = std::function<void(const std::shared_ptr<IPlugin>&)>;
 
   void add_mixin_wirer(MixinWirer wirer) {
     if (wirer) custom_wirers_.push_back(std::move(wirer));
@@ -1213,7 +1221,7 @@ class PluginManager {
 
   // Wire all opt-in mixins on an instance.
   // Order: validate+configure → inject services → inject events → custom wirers → init.
-  void wire_instance(std::shared_ptr<IPlugin>& instance,
+  void wire_instance(const std::shared_ptr<IPlugin>& instance,
                      const PluginEntry& entry, const ConfigMap& config_map,
                      bool skip_validation = false) {
     auto resolved = resolve_plugin_config(

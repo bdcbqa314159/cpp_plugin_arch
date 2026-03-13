@@ -29,6 +29,14 @@ namespace plugin_arch {
 
 class EventBus {
  public:
+  EventBus() = default;
+  ~EventBus() = default;
+
+  EventBus(const EventBus&) = delete;
+  EventBus& operator=(const EventBus&) = delete;
+  EventBus(EventBus&&) = default;
+  EventBus& operator=(EventBus&&) = default;
+
   using Handler = std::function<void(const std::string& topic,
                                      const std::string& payload)>;
   using SubscriptionId = std::size_t;
@@ -117,7 +125,7 @@ class EventBus {
     }
   }
 
-  // --- Vetoable API (B5) ---
+  // --- Vetoable API ---
 
   // Subscribe a veto handler. Returns true to allow, false to veto.
   // Higher priority = checked first.
