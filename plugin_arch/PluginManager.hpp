@@ -1207,6 +1207,23 @@ class PluginManager {
     }
   }
 
+  // Register a pre-loaded instance and wire it. Shared by load_and_wire
+  // (serial) and load_all_parallel (parallel). Ensures notify_loaded fires
+  // and wire_instance is called consistently. Not virtual — this is an
+  // implementation detail, not a subclass override point.
+  void wire_preloaded(std::shared_ptr<IPlugin> instance,
+                      std::optional<PluginLoader<IPlugin>> loader,
+                      const PluginEntry& entry,
+                      const std::vector<std::string>& deps,
+                      const ConfigMap& config_map) {
+    locator_.add(instance);
+    plugins_.push_back(
+        {std::move(instance), std::move(loader), entry, deps});
+    rebuild_name_index();
+    wire_instance_tracked(plugins_.back(), config_map);
+    notify_loaded(entry);
+  }
+
  protected:
   // --- Extensibility points (override in subclasses) ---
   // Subclasses that override these SHOULD call the base implementation to
@@ -1275,22 +1292,6 @@ class PluginManager {
 
     wire_preloaded(std::move(instance), std::move(loader), entry, deps,
                    config_map);
-  }
-
-  // Register a pre-loaded instance and wire it. Shared by load_and_wire
-  // (serial) and load_all_parallel (parallel). Ensures notify_loaded fires
-  // and wire_instance is called consistently.
-  void wire_preloaded(std::shared_ptr<IPlugin> instance,
-                      std::optional<PluginLoader<IPlugin>> loader,
-                      const PluginEntry& entry,
-                      const std::vector<std::string>& deps,
-                      const ConfigMap& config_map) {
-    locator_.add(instance);
-    plugins_.push_back(
-        {std::move(instance), std::move(loader), entry, deps});
-    rebuild_name_index();
-    wire_instance_tracked(plugins_.back(), config_map);
-    notify_loaded(entry);
   }
 };
 
