@@ -388,6 +388,13 @@ class PluginManager {
                          LoadPolicy policy = LoadPolicy::strict) {
     PluginRegistry registry;
     (void)registry.scan(directory);
+    load_all_parallel(registry, config_map, policy);
+  }
+
+  // Parallel load from a pre-populated registry.
+  void load_all_parallel(PluginRegistry& registry,
+                         const ConfigMap& config_map = {},
+                         LoadPolicy policy = LoadPolicy::strict) {
     load_errors_.clear();
 
     auto [infos, levels] = discover_and_sort(registry, policy, &load_errors_);
@@ -464,7 +471,6 @@ class PluginManager {
                             infos[result.info_idx].deps});
         rebuild_name_index();
         wire_instance_tracked(plugins_.back(), config_map);
-    
       }
     }
   }
@@ -568,7 +574,7 @@ class PluginManager {
         {std::move(instance), std::nullopt, entry, std::move(deps)});
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map, /*skip_validation=*/true);
-    notify_loaded(entry.name, entry.type, entry);
+    notify_loaded(plugins_.back().entry);
 
   }
 
@@ -593,12 +599,12 @@ class PluginManager {
     // Shutdown reverse dependents
     for (std::size_t idx : dep_indices) {
       shutdown_plugin(plugins_[idx]);
-      notify_unloaded(plugins_[idx].entry.name, plugins_[idx].entry.type, plugins_[idx].entry);
+      notify_unloaded(plugins_[idx].entry);
     }
 
     // Shutdown the target
     shutdown_plugin(plugins_[it->second]);
-    notify_unloaded(name, target_type, plugins_[it->second].entry);
+    notify_unloaded(plugins_[it->second].entry);
 
     // Collect all indices to remove
     std::unordered_set<std::size_t> to_remove(dep_indices.begin(),
@@ -688,7 +694,7 @@ class PluginManager {
       wire_instance_tracked(plugins_[idx], config_map);
     }
 
-    notify_reloaded(name, target_type, target.entry);
+    notify_reloaded(target.entry);
 
   }
 
@@ -754,7 +760,7 @@ class PluginManager {
     lp.enabled = true;
     rebuild_locator();
     wire_instance_tracked(lp, config_map);
-    notify_enabled(lp.entry.name, lp.entry.type, lp.entry);
+    notify_enabled(lp.entry);
   }
 
   // Check if a plugin is enabled.
@@ -961,20 +967,20 @@ class PluginManager {
 
   // --- Observer notification ---
 
-  void notify_loaded(const std::string& name, const std::string& type, const PluginEntry& entry) {
-    for (auto* obs : observers_) { try { obs->on_plugin_loaded(name, type, entry); } catch (...) {} }
+  void notify_loaded(const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_loaded(entry.name, entry.type, entry); } catch (...) {} }
   }
-  void notify_unloaded(const std::string& name, const std::string& type, const PluginEntry& entry) {
-    for (auto* obs : observers_) { try { obs->on_plugin_unloaded(name, type, entry); } catch (...) {} }
+  void notify_unloaded(const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_unloaded(entry.name, entry.type, entry); } catch (...) {} }
   }
-  void notify_reloaded(const std::string& name, const std::string& type, const PluginEntry& entry) {
-    for (auto* obs : observers_) { try { obs->on_plugin_reloaded(name, type, entry); } catch (...) {} }
+  void notify_reloaded(const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_reloaded(entry.name, entry.type, entry); } catch (...) {} }
   }
-  void notify_enabled(const std::string& name, const std::string& type, const PluginEntry& entry) {
-    for (auto* obs : observers_) { try { obs->on_plugin_enabled(name, type, entry); } catch (...) {} }
+  void notify_enabled(const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_enabled(entry.name, entry.type, entry); } catch (...) {} }
   }
-  void notify_disabled(const std::string& name, const std::string& type, const PluginEntry& entry) {
-    for (auto* obs : observers_) { try { obs->on_plugin_disabled(name, type, entry); } catch (...) {} }
+  void notify_disabled(const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_disabled(entry.name, entry.type, entry); } catch (...) {} }
   }
 
   // --- Name index ---
@@ -1008,7 +1014,7 @@ class PluginManager {
     }
     lp.subscription_ids.clear();
     lp.enabled = false;
-    notify_disabled(lp.entry.name, lp.entry.type, lp.entry);
+    notify_disabled(lp.entry);
   }
 
   // --- Reverse dependency graph ---
@@ -1204,6 +1210,8 @@ class PluginManager {
 
  protected:
   // --- Extensibility points (override in subclasses) ---
+  // Subclasses that override these SHOULD call the base implementation to
+  // preserve built-in mixin wiring, lifecycle hooks, and locator registration.
 
   // Wire all opt-in mixins on an instance.
   // Order: validate+configure → inject services → inject events → custom wirers → init.
@@ -1271,7 +1279,7 @@ class PluginManager {
         {std::move(instance), std::move(loader), entry, deps});
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map);
-    notify_loaded(entry.name, entry.type, entry);
+    notify_loaded(entry);
   }
 };
 

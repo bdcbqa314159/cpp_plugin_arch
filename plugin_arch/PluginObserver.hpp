@@ -10,10 +10,9 @@
 
 #include <string>
 
-#include "PluginRegistry.hpp"
-
 namespace plugin_arch {
 
+struct PluginEntry;
 class PluginManager;
 
 class PluginObserver {

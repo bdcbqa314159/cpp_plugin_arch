@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,7 @@ class ServiceLocator {
   // per type is expected.
   void add_unique(const std::shared_ptr<IPlugin>& service) {
     if (!service) return;
+    cleanup();  // prune expired entries before checking for duplicates
     for (const auto& weak_svc : services_) {
       auto svc = weak_svc.lock();
       if (svc && svc->type() == service->type()) {
