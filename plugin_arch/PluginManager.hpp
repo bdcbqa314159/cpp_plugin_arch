@@ -1221,7 +1221,7 @@ class PluginManager {
         {std::move(instance), std::move(loader), entry, deps});
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map);
-    notify_loaded(entry);
+    notify_loaded(plugins_.back().entry);
   }
 
  protected:
