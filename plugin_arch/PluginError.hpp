@@ -31,16 +31,9 @@ class PluginError : public std::runtime_error {
 };
 
 // dlopen / LoadLibrary failed. Carries the platform-specific error string.
+// Always construct via ::make() to avoid reading moved-from state.
 class LoadError : public PluginError {
  public:
-  LoadError(std::string library_path, std::string platform_error)
-      : PluginError(std::move(library_path),
-                    "Failed to load library: " + this->library_path() +
-                        " (" + platform_error + ")"),
-        platform_error_(std::move(platform_error)) {}
-
-  // Two-phase construction: we need library_path stored before building what().
-  // Use a static factory to build the message cleanly.
   static LoadError make(std::string library_path, std::string platform_error) {
     std::string msg = "Failed to load library: " + library_path +
                       " (" + platform_error + ")";

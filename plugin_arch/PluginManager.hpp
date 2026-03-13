@@ -332,7 +332,7 @@ class PluginManager {
                             infos[result.info_idx].deps});
         rebuild_name_index();
         wire_instance_tracked(plugins_.back(), config_map);
-        instances_dirty_ = true;
+    
       }
     }
   }
@@ -377,6 +377,10 @@ class PluginManager {
     }
 
     // --- Dependency + version checks (D6) ---
+    // add_plugin is permissive about missing deps (provider may be added
+    // later — the reverse version check on line ~407 catches mismatches
+    // when the provider arrives). Version constraints are still validated
+    // when the provider is already loaded.
     std::vector<std::string> deps;
     auto* dep_aware = dynamic_cast<IDependencyAware*>(instance.get());
     if (dep_aware) {
@@ -384,10 +388,10 @@ class PluginManager {
         auto parsed = Dependency::parse(raw_dep);
         deps.push_back(parsed.type);
 
-        if (parsed.op != Dependency::Op::any) {
-          // Find the provider and check version constraint.
-          for (const auto& lp : plugins_) {
-            if (lp.entry.type == parsed.type) {
+        // Check version constraint only if the provider is already loaded.
+        for (const auto& lp : plugins_) {
+          if (lp.entry.type == parsed.type) {
+            if (parsed.op != Dependency::Op::any) {
               auto provider_version = SemVer::parse(lp.entry.version);
               if (!parsed.satisfied_by(provider_version)) {
                 throw std::runtime_error(
@@ -395,8 +399,8 @@ class PluginManager {
                     " but '" + lp.entry.name + "' provides version " +
                     lp.entry.version);
               }
-              break;
             }
+            break;
           }
         }
       }
@@ -448,7 +452,7 @@ class PluginManager {
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map, /*skip_validation=*/true);
     notify_loaded(entry.name, entry.type);
-    instances_dirty_ = true;
+
   }
 
   // --- Per-plugin unload (A1) ---
@@ -495,7 +499,7 @@ class PluginManager {
     plugins_ = std::move(remaining);
     rebuild_name_index();
     rebuild_locator();
-    instances_dirty_ = true;
+
   }
 
   // --- Per-plugin reload (A1) ---
@@ -568,7 +572,7 @@ class PluginManager {
     }
 
     notify_reloaded(name, target_type);
-    instances_dirty_ = true;
+
   }
 
   // --- Health checks (B1) ---
@@ -793,7 +797,7 @@ class PluginManager {
     locator_.clear();
     event_bus_.clear();
     load_errors_.clear();
-    instances_dirty_ = true;
+
   }
 
   [[nodiscard]] ServiceLocator& locator() { return locator_; }
@@ -802,17 +806,13 @@ class PluginManager {
   [[nodiscard]] EventBus& event_bus() { return event_bus_; }
   [[nodiscard]] const EventBus& event_bus() const { return event_bus_; }
 
-  [[nodiscard]] const std::vector<std::shared_ptr<IPlugin>>& instances()
-      const {
-    if (instances_dirty_) {
-      instances_cache_.clear();
-      instances_cache_.reserve(plugins_.size());
-      for (const auto& lp : plugins_) {
-        instances_cache_.push_back(lp.instance);
-      }
-      instances_dirty_ = false;
+  [[nodiscard]] std::vector<std::shared_ptr<IPlugin>> instances() const {
+    std::vector<std::shared_ptr<IPlugin>> result;
+    result.reserve(plugins_.size());
+    for (const auto& lp : plugins_) {
+      result.push_back(lp.instance);
     }
-    return instances_cache_;
+    return result;
   }
 
   // Get a loaded plugin by name. Returns nullptr if not found.
@@ -859,8 +859,6 @@ class PluginManager {
   EventBus event_bus_;
   std::vector<LoadedPlugin> plugins_;
   std::unordered_map<std::string, std::size_t> name_index_;
-  mutable std::vector<std::shared_ptr<IPlugin>> instances_cache_;
-  mutable bool instances_dirty_ = true;
   std::vector<ErrorRecord> load_errors_;
   std::vector<PluginObserver*> observers_;
 
@@ -1148,7 +1146,7 @@ class PluginManager {
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map);
     notify_loaded(entry.name, entry.type);
-    instances_dirty_ = true;
+
   }
 
   // Wire all opt-in mixins on an instance.
@@ -1218,18 +1216,43 @@ class PluginManager {
   }
 
   // Wire + track EventBus subscription IDs (for enable/disable).
+  //
+  // Relies on EventBus::next_id_ being monotonically increasing with no
+  // reuse: all IDs allocated between [before, after) belong to this plugin.
+  // This holds because PluginManager is single-threaded (or exclusively
+  // locked via ThreadSafe), and wire_instance may call on_init() /
+  // set_event_bus() which subscribe — those subscriptions correctly belong
+  // to this plugin. Unsubscribes during wiring don't break the invariant
+  // because IDs are never recycled.
   void wire_instance_tracked(LoadedPlugin& lp, const ConfigMap& config_map,
                               bool skip_validation = false) {
     auto before = event_bus_.next_subscription_id();
     wire_instance(lp.instance, lp.entry, config_map, skip_validation);
     auto after = event_bus_.next_subscription_id();
 
-    // Record all subscription IDs created during wiring
     lp.subscription_ids.clear();
     for (auto id = before; id < after; ++id) {
       lp.subscription_ids.push_back(id);
     }
   }
 };
+
+// --- ObserverGuard inline implementation ---
+// Defined here because it needs PluginManager to be complete.
+
+inline ObserverGuard::ObserverGuard(PluginManager& manager,
+                                    PluginObserver* observer)
+    : manager_(&manager), observer_(observer) {
+  if (observer_) manager_->add_observer(observer_);
+}
+
+inline ObserverGuard::~ObserverGuard() { release(); }
+
+inline void ObserverGuard::release() {
+  if (observer_) {
+    manager_->remove_observer(observer_);
+    observer_ = nullptr;
+  }
+}
 
 }  // namespace plugin_arch
