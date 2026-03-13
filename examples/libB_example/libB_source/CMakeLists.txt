@@ -7,5 +7,5 @@ target_include_directories(libB_vendor PUBLIC
     ${CMAKE_SOURCE_DIR}/examples/libB_example/prebuilt/include
 )
 
-# No post-build copy — the artifact lands in CMAKE_LIBRARY_OUTPUT_DIRECTORY
-# alongside all other shared libraries (build/bin/).
+# On MSVC, generate an import library even without __declspec(dllexport).
+set_target_properties(libB_vendor PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
