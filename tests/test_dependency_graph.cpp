@@ -182,7 +182,7 @@ TEST_CASE("Cycle detection: error shows cycle path", "[depgraph][cycle]") {
   };
 
   // Test via topological_sort_levels directly
-  std::vector<PluginInfo> infos(3);
+  std::vector<DiscoveredPlugin> infos(3);
   infos[0].entry.name = "CycleA";
   infos[0].entry.type = "cycleA";
   infos[0].deps = {"cycleC"};
@@ -208,7 +208,7 @@ TEST_CASE("Cycle detection: error shows cycle path", "[depgraph][cycle]") {
 }
 
 TEST_CASE("Cycle detection: two-node cycle shows path", "[depgraph][cycle]") {
-  std::vector<PluginInfo> infos(2);
+  std::vector<DiscoveredPlugin> infos(2);
   infos[0].entry.name = "Alpha";
   infos[0].entry.type = "alpha";
   infos[0].deps = {"beta"};

@@ -19,23 +19,28 @@ struct Event {
 class RecordingObserver : public PluginObserver {
  public:
   void on_plugin_loaded(const std::string& name,
-                        const std::string& type) override {
+                        const std::string& type,
+                        const PluginEntry&) override {
     events.push_back({"loaded", name, type});
   }
   void on_plugin_unloaded(const std::string& name,
-                          const std::string& type) override {
+                          const std::string& type,
+                          const PluginEntry&) override {
     events.push_back({"unloaded", name, type});
   }
   void on_plugin_reloaded(const std::string& name,
-                          const std::string& type) override {
+                          const std::string& type,
+                          const PluginEntry&) override {
     events.push_back({"reloaded", name, type});
   }
   void on_plugin_enabled(const std::string& name,
-                         const std::string& type) override {
+                         const std::string& type,
+                         const PluginEntry&) override {
     events.push_back({"enabled", name, type});
   }
   void on_plugin_disabled(const std::string& name,
-                          const std::string& type) override {
+                          const std::string& type,
+                          const PluginEntry&) override {
     events.push_back({"disabled", name, type});
   }
 
@@ -167,16 +172,16 @@ TEST_CASE("Observer: multiple observers", "[observer]") {
 TEST_CASE("Observer: throwing observer does not break manager", "[observer]") {
   class ThrowingObserver : public PluginObserver {
    public:
-    void on_plugin_loaded(const std::string&, const std::string&) override {
+    void on_plugin_loaded(const std::string&, const std::string&, const PluginEntry&) override {
       throw std::runtime_error("boom");
     }
-    void on_plugin_unloaded(const std::string&, const std::string&) override {
+    void on_plugin_unloaded(const std::string&, const std::string&, const PluginEntry&) override {
       throw std::runtime_error("boom");
     }
-    void on_plugin_disabled(const std::string&, const std::string&) override {
+    void on_plugin_disabled(const std::string&, const std::string&, const PluginEntry&) override {
       throw std::runtime_error("boom");
     }
-    void on_plugin_enabled(const std::string&, const std::string&) override {
+    void on_plugin_enabled(const std::string&, const std::string&, const PluginEntry&) override {
       throw std::runtime_error("boom");
     }
   };

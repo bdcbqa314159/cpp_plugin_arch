@@ -102,8 +102,8 @@ TEST_CASE("IConflictAware: dynamic_cast detection", "[conflicts]") {
   CHECK(dynamic_cast<IConflictAware*>(b.get()) == nullptr);
 }
 
-TEST_CASE("PluginInfo: conflicts field populated correctly", "[conflicts]") {
-  PluginInfo info;
+TEST_CASE("DiscoveredPlugin: conflicts field populated correctly", "[conflicts]") {
+  DiscoveredPlugin info;
   info.entry = make_entry("PluginA", "typeA");
   info.conflicts = {"typeB", "typeC"};
 

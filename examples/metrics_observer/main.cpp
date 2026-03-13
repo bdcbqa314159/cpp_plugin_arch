@@ -20,7 +20,8 @@ using namespace plugin_arch;
 class MetricsObserver : public PluginObserver {
  public:
   void on_plugin_loaded(const std::string& name,
-                        const std::string&) override {
+                        const std::string&,
+                        const PluginEntry&) override {
     ++total_loads_;
     ++plugin_loads_[name];
     std::cout << "  [metrics] loaded: " << name
@@ -28,25 +29,29 @@ class MetricsObserver : public PluginObserver {
   }
 
   void on_plugin_unloaded(const std::string& name,
-                          const std::string&) override {
+                          const std::string&,
+                          const PluginEntry&) override {
     ++total_unloads_;
     std::cout << "  [metrics] unloaded: " << name << "\n";
   }
 
   void on_plugin_enabled(const std::string& name,
-                         const std::string&) override {
+                         const std::string&,
+                         const PluginEntry&) override {
     ++total_enables_;
     std::cout << "  [metrics] enabled: " << name << "\n";
   }
 
   void on_plugin_disabled(const std::string& name,
-                          const std::string&) override {
+                          const std::string&,
+                          const PluginEntry&) override {
     ++total_disables_;
     std::cout << "  [metrics] disabled: " << name << "\n";
   }
 
   void on_plugin_reloaded(const std::string& name,
-                          const std::string&) override {
+                          const std::string&,
+                          const PluginEntry&) override {
     ++total_reloads_;
     std::cout << "  [metrics] reloaded: " << name << "\n";
   }

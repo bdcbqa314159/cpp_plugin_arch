@@ -34,6 +34,21 @@ class ServiceLocator {
     services_.push_back(service);
   }
 
+  // Register a loaded plugin as a unique service — throws if a service with
+  // the same type string is already registered. Use when only one provider
+  // per type is expected.
+  void add_unique(const std::shared_ptr<IPlugin>& service) {
+    if (!service) return;
+    for (const auto& weak_svc : services_) {
+      auto svc = weak_svc.lock();
+      if (svc && svc->type() == service->type()) {
+        throw std::runtime_error("ServiceLocator: duplicate type '" +
+                                 service->type() + "'");
+      }
+    }
+    services_.push_back(service);
+  }
+
   // Get the first service matching the given type string.
   // Returns nullptr if no match is found (or if the plugin has been destroyed).
   template <typename T>

@@ -57,7 +57,7 @@ enum class LoadPolicy {
 
 // Plugin metadata + dependency list — used for discovery and topological sort.
 // Public so tests and hosts can construct instances for PluginManager::add_plugin().
-struct PluginInfo {
+struct DiscoveredPlugin {
   PluginEntry entry;
   std::vector<std::string> deps;       // type strings (version stripped, for topo sort)
   std::vector<std::string> version_constraints;   // original strings (for version checking)
@@ -69,7 +69,7 @@ struct PluginInfo {
 // Throws on cycles or missing dependencies.
 // Free function so it can be tested independently.
 inline std::vector<std::vector<std::size_t>> topological_sort_levels(
-    const std::vector<PluginInfo>& infos,
+    const std::vector<DiscoveredPlugin>& infos,
     const std::unordered_map<std::string, std::size_t>& type_to_index) {
   const std::size_t n = infos.size();
 
@@ -192,7 +192,7 @@ inline std::vector<std::vector<std::size_t>> topological_sort_levels(
 // Check version constraints between discovered plugins.
 // Throws in strict mode, records errors in best_effort mode.
 inline void check_version_constraints(
-    const std::vector<PluginInfo>& infos,
+    const std::vector<DiscoveredPlugin>& infos,
     const std::unordered_map<std::string, std::size_t>& type_to_index,
     LoadPolicy policy,
     std::vector<ErrorRecord>* errors_out) {
@@ -233,7 +233,7 @@ inline void check_version_constraints(
 // Check mutual exclusion constraints between discovered plugins.
 // Throws in strict mode, records errors in best_effort mode.
 inline void check_conflict_constraints(
-    const std::vector<PluginInfo>& infos,
+    const std::vector<DiscoveredPlugin>& infos,
     const std::unordered_map<std::string, std::size_t>& type_to_index,
     LoadPolicy policy,
     std::vector<ErrorRecord>* errors_out) {
@@ -305,7 +305,7 @@ inline void apply_config_defaults(IPlugin* instance, PluginConfig& config) {
 class PluginManager {
  public:
   PluginManager() = default;
-  ~PluginManager() = default;
+  virtual ~PluginManager() = default;
 
   PluginManager(const PluginManager&) = delete;
   PluginManager& operator=(const PluginManager&) = delete;
@@ -568,7 +568,7 @@ class PluginManager {
         {std::move(instance), std::nullopt, entry, std::move(deps)});
     rebuild_name_index();
     wire_instance_tracked(plugins_.back(), config_map, /*skip_validation=*/true);
-    notify_loaded(entry.name, entry.type);
+    notify_loaded(entry.name, entry.type, entry);
 
   }
 
@@ -593,12 +593,12 @@ class PluginManager {
     // Shutdown reverse dependents
     for (std::size_t idx : dep_indices) {
       shutdown_plugin(plugins_[idx]);
-      notify_unloaded(plugins_[idx].entry.name, plugins_[idx].entry.type);
+      notify_unloaded(plugins_[idx].entry.name, plugins_[idx].entry.type, plugins_[idx].entry);
     }
 
     // Shutdown the target
     shutdown_plugin(plugins_[it->second]);
-    notify_unloaded(name, target_type);
+    notify_unloaded(name, target_type, plugins_[it->second].entry);
 
     // Collect all indices to remove
     std::unordered_set<std::size_t> to_remove(dep_indices.begin(),
@@ -688,7 +688,7 @@ class PluginManager {
       wire_instance_tracked(plugins_[idx], config_map);
     }
 
-    notify_reloaded(name, target_type);
+    notify_reloaded(name, target_type, target.entry);
 
   }
 
@@ -754,7 +754,7 @@ class PluginManager {
     lp.enabled = true;
     rebuild_locator();
     wire_instance_tracked(lp, config_map);
-    notify_enabled(lp.entry.name, lp.entry.type);
+    notify_enabled(lp.entry.name, lp.entry.type, lp.entry);
   }
 
   // Check if a plugin is enabled.
@@ -961,20 +961,20 @@ class PluginManager {
 
   // --- Observer notification ---
 
-  void notify_loaded(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) { try { obs->on_plugin_loaded(name, type); } catch (...) {} }
+  void notify_loaded(const std::string& name, const std::string& type, const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_loaded(name, type, entry); } catch (...) {} }
   }
-  void notify_unloaded(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) { try { obs->on_plugin_unloaded(name, type); } catch (...) {} }
+  void notify_unloaded(const std::string& name, const std::string& type, const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_unloaded(name, type, entry); } catch (...) {} }
   }
-  void notify_reloaded(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) { try { obs->on_plugin_reloaded(name, type); } catch (...) {} }
+  void notify_reloaded(const std::string& name, const std::string& type, const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_reloaded(name, type, entry); } catch (...) {} }
   }
-  void notify_enabled(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) { try { obs->on_plugin_enabled(name, type); } catch (...) {} }
+  void notify_enabled(const std::string& name, const std::string& type, const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_enabled(name, type, entry); } catch (...) {} }
   }
-  void notify_disabled(const std::string& name, const std::string& type) {
-    for (auto* obs : observers_) { try { obs->on_plugin_disabled(name, type); } catch (...) {} }
+  void notify_disabled(const std::string& name, const std::string& type, const PluginEntry& entry) {
+    for (auto* obs : observers_) { try { obs->on_plugin_disabled(name, type, entry); } catch (...) {} }
   }
 
   // --- Name index ---
@@ -1008,7 +1008,7 @@ class PluginManager {
     }
     lp.subscription_ids.clear();
     lp.enabled = false;
-    notify_disabled(lp.entry.name, lp.entry.type);
+    notify_disabled(lp.entry.name, lp.entry.type, lp.entry);
   }
 
   // --- Reverse dependency graph ---
@@ -1048,25 +1048,10 @@ class PluginManager {
     return result;
   }
 
-  // --- Plugin shutdown ---
-
-  // Calls on_shutdown() if the plugin implements ILifecycleAware.
-  // Swallows exceptions — one bad plugin must not prevent others from
-  // shutting down (same principle as EventBus::publish).
-  static void shutdown_plugin(LoadedPlugin& lp) {
-    auto* lifecycle = dynamic_cast<ILifecycleAware*>(lp.instance.get());
-    if (lifecycle) {
-      try {
-        lifecycle->on_shutdown();
-      } catch (...) {
-      }
-    }
-  }
-
   // --- Discovery ---
 
   struct DiscoveryResult {
-    std::vector<PluginInfo> infos;
+    std::vector<DiscoveredPlugin> infos;
     std::vector<std::vector<std::size_t>> levels;
   };
 
@@ -1077,11 +1062,11 @@ class PluginManager {
     const auto& entries = registry.entries();
     if (entries.empty()) return {};
 
-    std::vector<PluginInfo> infos;
+    std::vector<DiscoveredPlugin> infos;
     std::unordered_map<std::string, std::size_t> type_to_index;
 
     for (const auto& e : entries) {
-      PluginInfo info;
+      DiscoveredPlugin info;
       info.entry = e;
 
       // Probe for dependencies and conflicts (only typed plugins)
@@ -1134,7 +1119,7 @@ class PluginManager {
   // --- Dependency cascade ---
 
   static bool has_failed_dep(
-      const PluginInfo& info,
+      const DiscoveredPlugin& info,
       const std::unordered_set<std::string>& failed_types) {
     for (const auto& dep : info.deps) {
       if (failed_types.contains(dep)) return true;
@@ -1142,7 +1127,7 @@ class PluginManager {
     return false;
   }
 
-  void record_cascade_skip(const PluginInfo& info,
+  void record_cascade_skip(const DiscoveredPlugin& info,
                            std::unordered_set<std::string>& failed_types) {
     failed_types.insert(info.entry.type);
     load_errors_.push_back(
@@ -1165,29 +1150,6 @@ class PluginManager {
         load_errors_.push_back({entry.path, e.what()});
       }
     }
-  }
-
-  void load_and_wire(const PluginEntry& entry,
-                     const std::vector<std::string>& deps,
-                     const ConfigMap& config_map) {
-    std::shared_ptr<IPlugin> instance;
-    std::optional<PluginLoader<IPlugin>> loader;
-
-    if (entry.is_dynamic) {
-      instance = DynamicPluginAdapter::load(entry.path.string());
-    } else {
-      PluginLoader<IPlugin> pl(entry.path.string());
-      instance = pl.get_instance();
-      loader = std::move(pl);
-    }
-
-    locator_.add(instance);
-    plugins_.push_back(
-        {std::move(instance), std::move(loader), entry, deps});
-    rebuild_name_index();
-    wire_instance_tracked(plugins_.back(), config_map);
-    notify_loaded(entry.name, entry.type);
-
   }
 
   // Resolve, validate, and apply config for a plugin.
@@ -1219,9 +1181,33 @@ class PluginManager {
     return config;
   }
 
+  // Wire + track EventBus subscription IDs (for enable/disable).
+  //
+  // Relies on EventBus::next_id_ being monotonically increasing with no
+  // reuse: all IDs allocated between [before, after) belong to this plugin.
+  // This holds because PluginManager is single-threaded (or exclusively
+  // locked via ThreadSafe), and wire_instance may call on_init() /
+  // set_event_bus() which subscribe — those subscriptions correctly belong
+  // to this plugin. Unsubscribes during wiring don't break the invariant
+  // because IDs are never recycled.
+  void wire_instance_tracked(LoadedPlugin& lp, const ConfigMap& config_map,
+                              bool skip_validation = false) {
+    auto before = event_bus_.next_subscription_id();
+    wire_instance(lp.instance, lp.entry, config_map, skip_validation);
+    auto after = event_bus_.next_subscription_id();
+
+    lp.subscription_ids.clear();
+    for (auto id = before; id < after; ++id) {
+      lp.subscription_ids.push_back(id);
+    }
+  }
+
+ protected:
+  // --- Extensibility points (override in subclasses) ---
+
   // Wire all opt-in mixins on an instance.
   // Order: validate+configure → inject services → inject events → custom wirers → init.
-  void wire_instance(const std::shared_ptr<IPlugin>& instance,
+  virtual void wire_instance(const std::shared_ptr<IPlugin>& instance,
                      const PluginEntry& entry, const ConfigMap& config_map,
                      bool skip_validation = false) {
     auto resolved = resolve_plugin_config(
@@ -1252,25 +1238,40 @@ class PluginManager {
     }
   }
 
-  // Wire + track EventBus subscription IDs (for enable/disable).
-  //
-  // Relies on EventBus::next_id_ being monotonically increasing with no
-  // reuse: all IDs allocated between [before, after) belong to this plugin.
-  // This holds because PluginManager is single-threaded (or exclusively
-  // locked via ThreadSafe), and wire_instance may call on_init() /
-  // set_event_bus() which subscribe — those subscriptions correctly belong
-  // to this plugin. Unsubscribes during wiring don't break the invariant
-  // because IDs are never recycled.
-  void wire_instance_tracked(LoadedPlugin& lp, const ConfigMap& config_map,
-                              bool skip_validation = false) {
-    auto before = event_bus_.next_subscription_id();
-    wire_instance(lp.instance, lp.entry, config_map, skip_validation);
-    auto after = event_bus_.next_subscription_id();
-
-    lp.subscription_ids.clear();
-    for (auto id = before; id < after; ++id) {
-      lp.subscription_ids.push_back(id);
+  // Calls on_shutdown() if the plugin implements ILifecycleAware.
+  // Swallows exceptions — one bad plugin must not prevent others from
+  // shutting down (same principle as EventBus::publish).
+  virtual void shutdown_plugin(LoadedPlugin& lp) {
+    auto* lifecycle = dynamic_cast<ILifecycleAware*>(lp.instance.get());
+    if (lifecycle) {
+      try {
+        lifecycle->on_shutdown();
+      } catch (...) {
+      }
     }
+  }
+
+  // Load a plugin from disk and wire it into the manager.
+  virtual void load_and_wire(const PluginEntry& entry,
+                     const std::vector<std::string>& deps,
+                     const ConfigMap& config_map) {
+    std::shared_ptr<IPlugin> instance;
+    std::optional<PluginLoader<IPlugin>> loader;
+
+    if (entry.is_dynamic) {
+      instance = DynamicPluginAdapter::load(entry.path.string());
+    } else {
+      PluginLoader<IPlugin> pl(entry.path.string());
+      instance = pl.get_instance();
+      loader = std::move(pl);
+    }
+
+    locator_.add(instance);
+    plugins_.push_back(
+        {std::move(instance), std::move(loader), entry, deps});
+    rebuild_name_index();
+    wire_instance_tracked(plugins_.back(), config_map);
+    notify_loaded(entry.name, entry.type, entry);
   }
 };
 

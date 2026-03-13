@@ -7,15 +7,15 @@
 
 using namespace plugin_arch;
 
-// Helper: build PluginInfo + type_to_index from a simple list of {name/type, deps}.
-static std::pair<std::vector<PluginInfo>,
+// Helper: build DiscoveredPlugin + type_to_index from a simple list of {name/type, deps}.
+static std::pair<std::vector<DiscoveredPlugin>,
                  std::unordered_map<std::string, std::size_t>>
 make_graph(std::vector<std::pair<std::string, std::vector<std::string>>> nodes) {
-  std::vector<PluginInfo> infos;
+  std::vector<DiscoveredPlugin> infos;
   std::unordered_map<std::string, std::size_t> type_to_index;
 
   for (auto& [type, deps] : nodes) {
-    PluginInfo info;
+    DiscoveredPlugin info;
     info.entry.name = type;
     info.entry.type = type;
     info.deps = std::move(deps);
@@ -85,7 +85,7 @@ TEST_CASE("Topological sort: cycle detection", "[topo]") {
 }
 
 TEST_CASE("Topological sort: empty input", "[topo]") {
-  std::vector<PluginInfo> infos;
+  std::vector<DiscoveredPlugin> infos;
   std::unordered_map<std::string, std::size_t> idx;
   auto levels = topological_sort_levels(infos, idx);
   CHECK(levels.empty());

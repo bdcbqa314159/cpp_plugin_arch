@@ -10,6 +10,8 @@
 
 #include <string>
 
+#include "PluginRegistry.hpp"
+
 namespace plugin_arch {
 
 class PluginManager;
@@ -19,15 +21,20 @@ class PluginObserver {
   virtual ~PluginObserver() = default;
 
   virtual void on_plugin_loaded(const std::string& name,
-                                const std::string& type) {}
+                                const std::string& type,
+                                const PluginEntry& entry) {}
   virtual void on_plugin_unloaded(const std::string& name,
-                                  const std::string& type) {}
+                                  const std::string& type,
+                                  const PluginEntry& entry) {}
   virtual void on_plugin_reloaded(const std::string& name,
-                                  const std::string& type) {}
+                                  const std::string& type,
+                                  const PluginEntry& entry) {}
   virtual void on_plugin_enabled(const std::string& name,
-                                 const std::string& type) {}
+                                 const std::string& type,
+                                 const PluginEntry& entry) {}
   virtual void on_plugin_disabled(const std::string& name,
-                                  const std::string& type) {}
+                                  const std::string& type,
+                                  const PluginEntry& entry) {}
 };
 
 // RAII guard that auto-deregisters the observer on destruction.

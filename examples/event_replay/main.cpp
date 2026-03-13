@@ -34,23 +34,28 @@ class EventRecorder : public PluginObserver {
 
   // PluginObserver overrides
   void on_plugin_loaded(const std::string& name,
-                        const std::string&) override {
+                        const std::string&,
+                        const PluginEntry&) override {
     record("lifecycle", "loaded", name);
   }
   void on_plugin_unloaded(const std::string& name,
-                          const std::string&) override {
+                          const std::string&,
+                          const PluginEntry&) override {
     record("lifecycle", "unloaded", name);
   }
   void on_plugin_enabled(const std::string& name,
-                         const std::string&) override {
+                         const std::string&,
+                         const PluginEntry&) override {
     record("lifecycle", "enabled", name);
   }
   void on_plugin_disabled(const std::string& name,
-                          const std::string&) override {
+                          const std::string&,
+                          const PluginEntry&) override {
     record("lifecycle", "disabled", name);
   }
   void on_plugin_reloaded(const std::string& name,
-                          const std::string&) override {
+                          const std::string&,
+                          const PluginEntry&) override {
     record("lifecycle", "reloaded", name);
   }
 
