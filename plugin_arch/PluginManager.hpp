@@ -465,12 +465,11 @@ class PluginManager {
           }
           std::rethrow_exception(result.error);
         }
-        locator_.add(result.instance);
-        plugins_.push_back({std::move(result.instance), std::move(result.loader),
-                            infos[result.info_idx].entry,
-                            infos[result.info_idx].deps});
-        rebuild_name_index();
-        wire_instance_tracked(plugins_.back(), config_map);
+        // Wire through the same path as serial loading — ensures
+        // notify_loaded fires and virtual load_and_wire overrides apply.
+        wire_preloaded(std::move(result.instance), std::move(result.loader),
+                       infos[result.info_idx].entry,
+                       infos[result.info_idx].deps, config_map);
       }
     }
   }
@@ -1274,6 +1273,18 @@ class PluginManager {
       loader = std::move(pl);
     }
 
+    wire_preloaded(std::move(instance), std::move(loader), entry, deps,
+                   config_map);
+  }
+
+  // Register a pre-loaded instance and wire it. Shared by load_and_wire
+  // (serial) and load_all_parallel (parallel). Ensures notify_loaded fires
+  // and wire_instance is called consistently.
+  void wire_preloaded(std::shared_ptr<IPlugin> instance,
+                      std::optional<PluginLoader<IPlugin>> loader,
+                      const PluginEntry& entry,
+                      const std::vector<std::string>& deps,
+                      const ConfigMap& config_map) {
     locator_.add(instance);
     plugins_.push_back(
         {std::move(instance), std::move(loader), entry, deps});
